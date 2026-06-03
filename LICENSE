@@ -1,0 +1,81 @@
+# sub-maker Restricted Source License Agreement
+
+**Copyright (c) 2026 tsonubin. All Rights Reserved.**
+
+This repository and all associated materials (source code, binaries, documentation, templates, and related files) are the exclusive property of the copyright holder.
+
+## Purpose and Scope of This Publication
+
+This material is published on a public GitHub repository **solely** to permit limited, non-commercial, read-only access for the purposes of:
+
+- Academic or personal technical research into network protocols, censorship circumvention techniques, and related technologies; and
+- Educational study and security analysis.
+
+No broader rights are granted or implied.
+
+## Narrow Grant of Rights
+
+The copyright holder grants you a **limited, revocable, non-exclusive, non-transferable, non-sublicensable license** to:
+
+- Access the public GitHub repository via a web browser; and
+- Read and view the source code files contained therein,
+
+**strictly for the research and educational purposes stated above**.
+
+**NO OTHER RIGHTS ARE GRANTED.** Without prior express written permission from the copyright holder, you have no right to exercise any of the exclusive rights of the copyright holder under applicable copyright law.
+
+## Express Prohibitions
+
+The following activities are **expressly prohibited** and outside the scope of any license granted herein:
+
+1. Forking, mirroring, or copying the repository (including private forks or clones) for any purpose.
+2. Downloading, storing, or copying source code or binaries except as incidental to browser-based viewing.
+3. Building, compiling, modifying, adapting, translating, or preparing derivative works.
+4. Installing, executing, deploying, or running the software on any system, device, server, or cloud environment (personal, private, commercial, or otherwise).
+5. Using the software, or any output or functionality derived from it, to provide any proxy, VPN, circumvention, or network service to any person or entity.
+6. Redistributing, publishing, transmitting, hosting, or otherwise making available the software, source, binaries, or documentation to any third party.
+7. Using the software in any manner that violates the laws of any jurisdiction.
+8. Removing or altering any copyright, license, or notice.
+
+Any attempt to exercise rights beyond the narrow grant above constitutes unauthorized use and copyright infringement.
+
+## Automatic Termination and Revocation
+
+This license terminates automatically and immediately upon any breach. Upon termination you must permanently delete all copies of the material and cease all use. The copyright holder may revoke this license at any time for any reason by notice (including by updating this file).
+
+## No Warranty; Disclaimer of Liability
+
+THE SOFTWARE AND ALL ASSOCIATED MATERIALS ARE PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES, OR ANY DAMAGES WHATSOEVER (INCLUDING LOSS OF PROFITS, DATA, USE, GOODWILL, OR OTHER INTANGIBLE LOSSES), ARISING OUT OF OR IN CONNECTION WITH THE USE, INABILITY TO USE, OR RELIANCE UPON THIS MATERIAL, WHETHER BASED ON CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, OR ANY OTHER THEORY, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+You assume all risk and responsibility for any use you make of this material.
+
+## Indemnification
+
+You agree to indemnify, defend, and hold harmless the copyright holder from and against any and all claims, damages, losses, costs, and expenses (including reasonable attorneys' fees) arising out of or relating to your access to, use of, or inability to use this material, or your violation of this License.
+
+## Representations by User
+
+By accessing or viewing this material, you represent and warrant that:
+- You have read and understand this License in its entirety;
+- Your intended activities are strictly within the narrow grant of rights above;
+- You will not use this material in any way that violates applicable law.
+
+## Governing Law and Miscellaneous
+
+This License shall be governed by and construed under the laws of the jurisdiction most favorable to enforcement of the copyright holder's rights, without regard to conflicts of law rules. Any dispute shall be subject to the exclusive jurisdiction of the courts located in such jurisdiction.
+
+If any provision of this License is held unenforceable, the remaining provisions shall continue in full force.
+
+This License constitutes the entire agreement between you and the copyright holder concerning the subject matter hereof and supersedes all prior agreements.
+
+## Contact for Additional Permissions
+
+Any use beyond the limited rights expressly granted requires prior written authorization from the copyright holder. Contact the author through the repository if you wish to request such authorization.
+
+---
+
+**By viewing, cloning, downloading, or using any part of this repository you agree to be bound by this License.**
+
+Last updated: 2026
