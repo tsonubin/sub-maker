@@ -100,6 +100,11 @@ func Apply(cfg *config.SetupConfig) error {
 	}
 
 	// 8. Write sub-maker config.yaml.
+	if cfg.LinkPasscodeHash == "" || cfg.LinkPasscodeSalt == "" {
+		if err := cfg.SetLinkPasscode(config.GenerateLinkPasscode()); err != nil {
+			return fmt.Errorf("set SSH link passcode: %w", err)
+		}
+	}
 	cfg.UpdatedAt = time.Now()
 	if cfg.CreatedAt.IsZero() {
 		cfg.CreatedAt = cfg.UpdatedAt
@@ -130,8 +135,12 @@ func Apply(cfg *config.SetupConfig) error {
 	if cfg.Domain != "" && cfg.ServerAddr != "" {
 		fmt.Printf("IP fallback:\n  %s\n", links.IPFallback)
 	}
+	if cfg.LinkPasscodePlain != "" {
+		fmt.Printf("SSH link passcode:\n  %s\n", cfg.LinkPasscodePlain)
+	}
 	fmt.Printf("\nCommands:\n")
 	fmt.Printf("  sudo sub-maker status\n")
+	fmt.Printf("  sudo sub-maker link\n")
 	fmt.Printf("  sudo sub-maker links\n")
 	fmt.Printf("  sudo sub-maker doctor\n")
 	fmt.Printf("  sudo sub-maker restart\n")

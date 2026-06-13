@@ -54,7 +54,7 @@ func RunWizard() (*config.SetupConfig, error) {
 	}
 	cfg.SetupMode = config.SetupMode(setupMode)
 
-	var domain, email, token, subPortStr string
+	var domain, email, token, subPortStr, linkPasscode string
 	serverAddr := cfg.ServerAddr
 	addressForm := huh.NewForm(
 		huh.NewGroup(
@@ -72,6 +72,11 @@ func RunWizard() (*config.SetupConfig, error) {
 				}),
 			huh.NewInput().Title("ACME contact email").Value(&email).Placeholder("admin@example.com"),
 			huh.NewInput().Title("Subscription token (auto-generated if empty)").Value(&token).Placeholder("leave blank to auto-gen"),
+			huh.NewInput().
+				Title("SSH link retrieval passcode (blank = auto-generate)").
+				Description("Used by `sub-maker link` over SSH to reveal only the subscription URL.").
+				Value(&linkPasscode).
+				EchoMode(huh.EchoModePassword),
 			huh.NewInput().Title("Subscription listen port").Value(&subPortStr).Placeholder("8964"),
 		),
 	)
@@ -89,6 +94,12 @@ func RunWizard() (*config.SetupConfig, error) {
 		token = randomToken()
 	}
 	cfg.SubToken = token
+	if linkPasscode == "" {
+		linkPasscode = config.GenerateLinkPasscode()
+	}
+	if err := cfg.SetLinkPasscode(linkPasscode); err != nil {
+		return nil, err
+	}
 	if subPortStr != "" {
 		fmt.Sscanf(subPortStr, "%d", &cfg.SubPort)
 	}

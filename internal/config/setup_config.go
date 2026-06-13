@@ -1,6 +1,13 @@
 package config
 
-import "time"
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"fmt"
+	"time"
+)
 
 type SetupMode string
 
@@ -40,6 +47,10 @@ type SetupConfig struct {
 	SetupMode  SetupMode       `yaml:"setup_mode"`
 	DNSCheck   *DNSCheckResult `yaml:"dns_check,omitempty"`
 
+	LinkPasscodeSalt  string `yaml:"link_passcode_salt,omitempty"`
+	LinkPasscodeHash  string `yaml:"link_passcode_hash,omitempty"`
+	LinkPasscodePlain string `yaml:"-"`
+
 	EnabledProtocols []string                     `yaml:"enabled_protocols"` // e.g. ["reality","hysteria2",...]
 	Ports            map[string]int               `yaml:"ports"`
 	Creds            map[string]map[string]string `yaml:"creds"` // per proto extra (uuid, pass, pbk, short_id, sni, remark)
@@ -68,4 +79,45 @@ func DefaultConfig() *SetupConfig {
 		CertMode:  CertStrategyCertbotHTTP,
 		SetupMode: SetupModeProduction,
 	}
+}
+
+func GenerateLinkPasscode() string {
+	const alphabet = "23456789abcdefghjkmnpqrstuvwxyz"
+	b := make([]byte, 10)
+	if _, err := rand.Read(b); err != nil {
+		return "change-me"
+	}
+	out := make([]byte, len(b))
+	for i, value := range b {
+		out[i] = alphabet[int(value)%len(alphabet)]
+	}
+	return string(out)
+}
+
+func (cfg *SetupConfig) SetLinkPasscode(passcode string) error {
+	if passcode == "" {
+		return fmt.Errorf("passcode is required")
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return err
+	}
+	saltText := base64.RawURLEncoding.EncodeToString(salt)
+	cfg.LinkPasscodeSalt = saltText
+	cfg.LinkPasscodeHash = hashLinkPasscode(saltText, passcode)
+	cfg.LinkPasscodePlain = passcode
+	return nil
+}
+
+func (cfg *SetupConfig) VerifyLinkPasscode(passcode string) bool {
+	if cfg == nil || cfg.LinkPasscodeSalt == "" || cfg.LinkPasscodeHash == "" || passcode == "" {
+		return false
+	}
+	expected := hashLinkPasscode(cfg.LinkPasscodeSalt, passcode)
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(cfg.LinkPasscodeHash)) == 1
+}
+
+func hashLinkPasscode(salt, passcode string) string {
+	sum := sha256.Sum256([]byte(salt + "\x00" + passcode))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }

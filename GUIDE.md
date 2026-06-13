@@ -177,6 +177,7 @@ The TUI will guide you through:
    - Domain for ACME certificates (highly recommended)
    - ACME contact email
    - Subscription token (auto-generated if left blank — treat this like a password)
+   - SSH link retrieval passcode (auto-generated if left blank)
    - Subscription port (default 8964)
 
 3. **Protocol selection**
@@ -253,9 +254,17 @@ Useful commands:
 
 ```bash
 sudo sub-maker links
+sudo sub-maker link
 sudo sub-maker doctor
 sudo sub-maker status
 sudo sub-maker restart
+```
+
+Use `links` when you are administering the server and want the full subscription/raw/fallback set. Use `link` when retrieving the subscription over SSH; it asks for the setup passcode and prints only the subscription URL.
+
+```bash
+ssh root@your-server 'sub-maker link'
+printf '%s\n' 'YOUR-LINK-PASSCODE' | ssh root@your-server 'sub-maker link --passcode-stdin'
 ```
 
 Raw systemd commands still work:
@@ -321,6 +330,7 @@ Import them individually in clients that support the URI scheme.
 
 - **Reconfiguring**: Run `sudo sub-maker setup` again. The setup flow rewrites configs and restarts/verifies services.
 - **Health checks**: Run `sudo sub-maker doctor`.
+- **SSH link retrieval**: Run `sudo sub-maker link` and enter the setup passcode.
 - **Viewing links**: Run `sudo sub-maker links`.
 - **Renewing certificates**: Certbot usually installs a timer; acme.sh usually installs a cron job. You can also renew manually and then run `sudo sub-maker restart`.
 - **Viewing current nodes**: `sudo sub-maker nodes` or `curl 'http://127.0.0.1:8964/raw?token=...'`.

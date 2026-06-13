@@ -35,6 +35,7 @@ func main() {
 		fmt.Println("  sub-maker --serve")
 		fmt.Println("  sub-maker --nodes")
 		fmt.Println("  sudo sub-maker doctor")
+		fmt.Println("  sudo sub-maker link")
 		fmt.Println("  sudo sub-maker links")
 		fmt.Println("  sudo sub-maker restart")
 	}
@@ -69,6 +70,18 @@ func main() {
 	case command == "links":
 		if err := cli.PrintLinks(); err != nil {
 			slog.Error("links failed", "err", err)
+			os.Exit(1)
+		}
+	case command == "link":
+		linkFlags := flag.NewFlagSet("link", flag.ExitOnError)
+		passcode := linkFlags.String("passcode", "", "Passcode for SSH link retrieval")
+		passcodeStdin := linkFlags.Bool("passcode-stdin", false, "Read passcode from stdin")
+		if err := linkFlags.Parse(flag.Args()[1:]); err != nil {
+			slog.Error("link flags failed", "err", err)
+			os.Exit(1)
+		}
+		if err := cli.PrintSubscriptionLinkWithPasscode(*passcode, *passcodeStdin); err != nil {
+			slog.Error("link failed", "err", err)
 			os.Exit(1)
 		}
 	case command == "doctor":

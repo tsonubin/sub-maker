@@ -23,7 +23,7 @@ See the full usage below and GUIDE.md for details.
 - Certificate handling through Certbot HTTP-01, acme.sh HTTP-01/DNS-01, existing cert files, or self-signed fallback.
 - Built-in Clash subscription server on 8964 with rulesets.
 - Systemd service generation for easy deployment.
-- Operational commands: `doctor`, `links`, `status`, `restart`, `start`, `stop`.
+- Operational commands: `doctor`, `link`, `links`, `status`, `restart`, `start`, `stop`.
 - Demo mode for testing without root.
 
 See below for commands and GUIDE.md for full tutorial.
@@ -67,6 +67,7 @@ sudo sub-maker --setup
 # - Domain for DNS, certificates, and domain-based subscription
 # - Email for certificate issuance
 # - Subscription token (leave blank to auto-generate)
+# - SSH link retrieval passcode (leave blank to auto-generate)
 # - Subscription port (default 8964)
 # - Select which of the 5 protocols to enable
 # - Per-protocol ports, credentials, SNI, Reality shortId, etc.
@@ -81,6 +82,7 @@ sudo ufw allow 8443/udp    # Hysteria2
 
 # 4. Inspect final links and health
 sudo sub-maker links
+sudo sub-maker link
 sudo sub-maker doctor
 ```
 
@@ -121,6 +123,7 @@ See `.github/workflows/release.yml` for details.
 | `setup` / `--setup` | Launch the production-first TUI wizard and apply configuration | `sudo sub-maker setup` |
 | `serve` / `--serve` | Run the subscription HTTP server | `sub-maker serve` |
 | `nodes` / `--nodes` | Print generated node URIs from `/etc/sub-maker/nodes.txt` | `sudo sub-maker nodes` |
+| `link` | Print only the subscription URL after passcode verification, useful over SSH | `sudo sub-maker link` |
 | `links` | Print subscription, raw node, and IP fallback URLs | `sudo sub-maker links` |
 | `doctor` | Check config, nodes, DNS, certs, services, and local subscription endpoint | `sudo sub-maker doctor` |
 | `status` | Show systemd status for sing-box and sub-maker-sub | `sudo sub-maker status` |
@@ -142,9 +145,17 @@ After a successful real setup, services are already started and the local subscr
 
 ```bash
 sudo sub-maker links
+sudo sub-maker link
 sudo sub-maker doctor
 sudo sub-maker status
 sudo journalctl -u sub-maker-sub -f
+```
+
+For remote retrieval, SSH into the server and ask for only the subscription URL:
+
+```bash
+ssh root@YOUR-SERVER 'sub-maker link'
+printf '%s\n' 'YOUR-LINK-PASSCODE' | ssh root@YOUR-SERVER 'sub-maker link --passcode-stdin'
 ```
 
 **Important**: Re-run `sudo ./sub-maker --setup` if you want to change protocols, ports, credentials, or re-obtain certificates. It is safe and will back up / overwrite as needed.
