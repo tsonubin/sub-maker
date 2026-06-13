@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -172,16 +173,16 @@ func nodesToClashProxiesWithNames(nodes []string) (string, []string) {
 		var line string
 		switch scheme {
 		case "hysteria2":
-			line = fmt.Sprintf("  - {name: \"%s\", type: hysteria2, server: %s, port: %s, password: \"%s\", sni: \"%s\"}\n",
+			line = fmt.Sprintf("  - {name: \"%s\", type: hysteria2, server: %s, port: %s, password: \"%s\", sni: \"%s\", alpn: [h3], udp: true, skip-cert-verify: false}\n",
 				remark, host, port, u.User.Username(), u.Query().Get("sni"))
 		case "vless":
 			uuid := u.User.Username()
 			sec := u.Query().Get("security")
 			if sec == "reality" {
-				line = fmt.Sprintf("  - {name: \"%s\", type: vless, server: %s, port: %s, uuid: \"%s\", network: tcp, tls: true, reality-opts: {public-key: \"%s\", short-id: \"%s\"}, client-fingerprint: chrome}\n",
-					remark, host, port, uuid, u.Query().Get("pbk"), u.Query().Get("sid"))
+				line = fmt.Sprintf("  - {name: \"%s\", type: vless, server: %s, port: %s, uuid: \"%s\", network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: \"%s\", packet-encoding: xudp, reality-opts: {public-key: \"%s\", short-id: \"%s\"}, client-fingerprint: chrome}\n",
+					remark, host, port, uuid, u.Query().Get("sni"), u.Query().Get("pbk"), u.Query().Get("sid"))
 			} else {
-				line = fmt.Sprintf("  - {name: \"%s\", type: vless, server: %s, port: %s, uuid: \"%s\", tls: true}\n", remark, host, port, uuid)
+				line = fmt.Sprintf("  - {name: \"%s\", type: vless, server: %s, port: %s, uuid: \"%s\", tls: true, udp: true}\n", remark, host, port, uuid)
 			}
 		case "tuic":
 			parts := strings.Split(u.User.String(), ":")
@@ -189,14 +190,15 @@ func nodesToClashProxiesWithNames(nodes []string) (string, []string) {
 			if len(parts) > 1 {
 				pass = parts[1]
 			}
-			line = fmt.Sprintf("  - {name: \"%s\", type: tuic, server: %s, port: %s, uuid: \"%s\", password: \"%s\", sni: \"%s\", alpn: [h3], udp-relay-mode: native}\n",
+			line = fmt.Sprintf("  - {name: \"%s\", type: tuic, server: %s, port: %s, uuid: \"%s\", password: \"%s\", sni: \"%s\", alpn: [h3], udp: true, udp-relay-mode: native, congestion-controller: bbr}\n",
 				remark, host, port, uuid, pass, u.Query().Get("sni"))
 		case "anytls":
-			line = fmt.Sprintf("  - {name: \"%s\", type: trojan, server: %s, port: %s, password: \"%s\", sni: \"%s\"}  # anytls (mapped)\n",
+			line = fmt.Sprintf("  - {name: \"%s\", type: anytls, server: %s, port: %s, password: \"%s\", sni: \"%s\", client-fingerprint: chrome, udp: true, alpn: [h2, http/1.1]}\n",
 				remark, host, port, u.User.Username(), u.Query().Get("sni"))
 		case "ss":
-			line = fmt.Sprintf("  - {name: \"%s\", type: ss, server: %s, port: %s, cipher: \"%s\", password: \"%s\"}\n",
-				remark, host, port, "2022-blake3-aes-128-gcm", u.User.Username())
+			cipher, password := decodeSSUserInfo(u.User.Username())
+			line = fmt.Sprintf("  - {name: \"%s\", type: ss, server: %s, port: %s, cipher: \"%s\", password: \"%s\", udp: true}\n",
+				remark, host, port, cipher, password)
 		default:
 			line = fmt.Sprintf("  - {name: \"%s\", type: ss, server: %s, port: %s, cipher: \"aes-128-gcm\", password: \"demo\"}\n", remark, host, port)
 		}
@@ -208,9 +210,22 @@ func nodesToClashProxiesWithNames(nodes []string) (string, []string) {
 	return buf.String(), names
 }
 
+func decodeSSUserInfo(encoded string) (string, string) {
+	for _, encoding := range []*base64.Encoding{base64.RawURLEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.StdEncoding} {
+		decoded, err := encoding.DecodeString(encoded)
+		if err != nil {
+			continue
+		}
+		parts := strings.SplitN(string(decoded), ":", 2)
+		if len(parts) == 2 && parts[0] != "" {
+			return parts[0], parts[1]
+		}
+	}
+	return "2022-blake3-aes-128-gcm", encoded
+}
+
 // keep old name for compatibility if any other code calls it
 func nodesToClashProxies(nodes []string) string {
 	y, _ := nodesToClashProxiesWithNames(nodes)
 	return y
 }
-

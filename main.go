@@ -7,15 +7,14 @@ import (
 	"os"
 	"time"
 
+	"github.com/tsonubin/sub-maker/internal/cli"
 	"github.com/tsonubin/sub-maker/internal/config"
-	"github.com/tsonubin/sub-maker/internal/generator"
 	"github.com/tsonubin/sub-maker/internal/server"
 	"github.com/tsonubin/sub-maker/internal/setup"
 	"github.com/tsonubin/sub-maker/internal/tui"
 )
 
 var version = "dev"
-
 
 func main() {
 	setupCmd := flag.Bool("setup", false, "Run interactive TUI setup wizard (collects info, generates nodes/certs stubs)")
@@ -35,6 +34,9 @@ func main() {
 		fmt.Println("  SUB_MAKER_DEMO=1 sub-maker --setup")
 		fmt.Println("  sub-maker --serve")
 		fmt.Println("  sub-maker --nodes")
+		fmt.Println("  sudo sub-maker doctor")
+		fmt.Println("  sudo sub-maker links")
+		fmt.Println("  sudo sub-maker restart")
 	}
 
 	flag.Parse()
@@ -46,48 +48,65 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
+	command := flag.Arg(0)
 	switch {
-	case *setupCmd:
-		var cfg *config.SetupConfig
-		if os.Getenv("SUB_MAKER_DEMO") != "" {
-			// Non-interactive demo path (for CI / this env without tty)
-			cfg = config.DefaultConfig()
-			cfg.ServerAddr = "demo.server.example"
-			cfg.Domain = "example.com"
-			cfg.SubToken = "demo-token-123"
-			slog.Info("DEMO mode: using defaults (no interactive TUI)")
-		} else {
-			var err error
-			cfg, err = tui.RunWizard()
-			if err != nil {
-				slog.Error("wizard failed", "err", err)
-				os.Exit(1)
-			}
-		}
-		// Real apply (currently demo that writes to /tmp + prints instructions)
-		if err := setup.Apply(cfg); err != nil {
-			slog.Error("apply failed", "err", err)
-			os.Exit(1)
-		}
-
-	case *serveCmd:
+	case *setupCmd || command == "setup":
+		runSetup()
+	case *serveCmd || command == "serve":
 		if err := server.Run(); err != nil {
 			slog.Error("server failed", "err", err)
 			os.Exit(1)
 		}
-	case *nodesCmd:
-		// In real: load /etc/sub-maker/nodes.txt or config
-		fmt.Println("Demo nodes (run --setup first for real):")
-		nodes := generator.GenerateAll("demo.server", "example.com", config.DefaultConfig().Ports, nil)
-		for _, n := range nodes {
-			fmt.Println(n.URI)
+	case *nodesCmd || command == "nodes":
+		data, err := os.ReadFile(cli.NodesPath())
+		if err != nil {
+			slog.Error("read nodes failed; run setup first", "path", cli.NodesPath(), "err", err)
+			os.Exit(1)
 		}
-	case *updateCmd:
+		fmt.Print(string(data))
+	case *updateCmd || command == "update":
 		fmt.Println("Update logic not yet implemented (task 9).")
+	case command == "links":
+		if err := cli.PrintLinks(); err != nil {
+			slog.Error("links failed", "err", err)
+			os.Exit(1)
+		}
+	case command == "doctor":
+		if err := cli.Doctor(); err != nil {
+			os.Exit(1)
+		}
+	case command == "status" || command == "restart" || command == "start" || command == "stop":
+		if err := cli.ServiceCommand(command); err != nil {
+			slog.Error(command+" failed", "err", err)
+			os.Exit(1)
+		}
 	default:
 		// No subcommand provided — show usage (includes disclaimer)
 		flag.Usage()
 	}
 
 	_ = time.Now() // keep import if needed
+}
+
+func runSetup() {
+	var cfg *config.SetupConfig
+	if os.Getenv("SUB_MAKER_DEMO") != "" {
+		// Non-interactive demo path (for CI / this env without tty)
+		cfg = config.DefaultConfig()
+		cfg.ServerAddr = "demo.server.example"
+		cfg.Domain = "example.com"
+		cfg.SubToken = "demo-token-123"
+		slog.Info("DEMO mode: using defaults (no interactive TUI)")
+	} else {
+		var err error
+		cfg, err = tui.RunWizard()
+		if err != nil {
+			slog.Error("wizard failed", "err", err)
+			os.Exit(1)
+		}
+	}
+	if err := setup.Apply(cfg); err != nil {
+		slog.Error("apply failed", "err", err)
+		os.Exit(1)
+	}
 }

@@ -6,7 +6,8 @@
   "users": [
     {
       "name": "user",
-      "uuid": "{{ .UUID }}"
+      "uuid": "{{ .UUID }}",
+      "flow": "xtls-rprx-vision"
     }
   ],
   "tls": {

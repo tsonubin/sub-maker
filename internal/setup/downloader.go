@@ -3,6 +3,7 @@ package setup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 func downloadFile(url, dest string) error {
@@ -82,7 +84,7 @@ func extractTarGz(src, dest string) error {
 // In DEMO mode (SUB_MAKER_DEMO=1), installs to $HOME/.local/bin/sing-box (no sudo needed).
 func DownloadSingBox(version string) error {
 	if version == "" {
-		version = "v1.10.3" // recent stable as of knowledge
+		version = latestGitHubReleaseTag("SagerNet/sing-box", "v1.12.0")
 	}
 	arch := runtime.GOARCH
 	if arch == "amd64" {
@@ -125,6 +127,33 @@ func DownloadSingBox(version string) error {
 		installPath = filepath.Join(installDir, "sing-box")
 	}
 	return os.Rename(bin, installPath)
+}
+
+func latestGitHubReleaseTag(repo, fallback string) string {
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/"+repo+"/releases/latest", nil)
+	if err != nil {
+		return fallback
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fallback
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fallback
+	}
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&payload); err != nil {
+		return fallback
+	}
+	if payload.TagName == "" {
+		return fallback
+	}
+	return payload.TagName
 }
 
 // DownloadSubconverter downloads the (tindy) subconverter and places in /opt/subconverter

@@ -1,6 +1,6 @@
 # sub-maker
 
-**sub-maker** is a TUI tool to set up a proxy server on a VPS using sing-box. It supports multiple protocols, handles certificates via acme.sh, and provides a Clash subscription endpoint on port 8964 that includes common rulesets via subconverter integration.
+**sub-maker** is a TUI tool to set up a proxy server on a VPS using sing-box. It supports multiple protocols, verifies domain DNS, handles certificates via Certbot or acme.sh, starts services, and provides a Clash subscription endpoint on port 8964.
 
 See [LICENSE](LICENSE) for terms. This is a restricted license: viewing source for personal research/education only; forking or any use/deployment by others requires prior written permission.
 
@@ -11,14 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh 
 sudo sub-maker --setup
 ```
 
-After setup:
-
-```
-sudo systemctl daemon-reload
-sudo systemctl enable --now sing-box subconverter sub-maker-sub
-```
-
-Your subscription will be at `http://your-ip:8964/sub?token=...`
+Production setup finishes by starting services, verifying the local subscription endpoint, and printing your subscription URL. If DNS or certificates are not ready, setup stops with the exact record or cert action needed.
 
 See the full usage below and GUIDE.md for details.
 
@@ -26,9 +19,11 @@ See the full usage below and GUIDE.md for details.
 
 - Interactive setup wizard for server configuration.
 - Supports VLESS+Reality, Hysteria2, TUICv5, AnyTLS, and Shadowsocks 2022 via sing-box.
-- ACME certificate handling.
+- DNS checks for domain-based setup.
+- Certificate handling through Certbot HTTP-01, acme.sh HTTP-01/DNS-01, existing cert files, or self-signed fallback.
 - Built-in Clash subscription server on 8964 with rulesets.
 - Systemd service generation for easy deployment.
+- Operational commands: `doctor`, `links`, `status`, `restart`, `start`, `stop`.
 - Demo mode for testing without root.
 
 See below for commands and GUIDE.md for full tutorial.
@@ -41,7 +36,7 @@ See below for commands and GUIDE.md for full tutorial.
   - Installs subconverter to `/opt/subconverter`.
   - Writes systemd unit files to `/etc/systemd/system/`.
   - Writes persistent configs to `/etc/sub-maker/`.
-  - May execute firewall commands (e.g., ufw) and acme.sh for certificates.
+  - May install/run Certbot or acme.sh for certificates.
 - **You do *not* need sudo for testing/demo/CI**:
   - Use `SUB_MAKER_DEMO=1 ./sub-maker --setup` (or in TUI flows). This redirects configs to `/tmp/sub-maker-demo-etc/...` (user-writable), installs sing-box to `~/.local/bin/sing-box` and subconverter to `~/.local/subconverter` (fully user-writable, no root needed), skips real service enabling.
   - You can then run `./sub-maker --serve` as a regular user (using env vars like `SUB_MAKER_NODES_FILE=...` and `SUB_MAKER_PORT=...` to point to demo paths).
@@ -52,7 +47,7 @@ See below for commands and GUIDE.md for full tutorial.
 - Open inbound ports on your firewall / VPS provider security group for the protocols you enable (default suggestions: 443 for Reality, 8443 for Hysteria2, 9443 for TUIC, 7443 for AnyTLS, 8388 for SS2022, plus 8964 for the subscription, and temporarily 80 for HTTP-01 ACME if used).
 - `curl`, `tar`, `gzip` (usually present).
 
-The tool will attempt to install `acme.sh` automatically when needed (this step also benefits from root for system-wide acme.sh).
+The tool will attempt to install Certbot or acme.sh automatically when needed.
 
 ## Quick Start
 
@@ -67,28 +62,26 @@ sudo sub-maker --setup
 # SUB_MAKER_DEMO=1 sub-maker --setup
 
 # Follow the TUI prompts:
-# - Server public IP or domain (for client links)
-# - Domain for ACME certs (highly recommended)
-# - Email for ACME
+# - Production domain setup or IP-only / advanced setup
+# - Server public IP (auto-detected when possible)
+# - Domain for DNS, certificates, and domain-based subscription
+# - Email for certificate issuance
 # - Subscription token (leave blank to auto-generate)
 # - Subscription port (default 8964)
 # - Select which of the 5 protocols to enable
 # - Per-protocol ports, credentials, SNI, Reality shortId, etc.
-# - Certificate mode (acme-http, acme-dns-cf, or self-signed)
+# - Certificate mode (certbot-http, acme-http, acme-dns-cf, existing, or self-signed)
 
-# 3. After setup completes, reload systemd and start the services
-sudo systemctl daemon-reload
-sudo systemctl enable --now sing-box subconverter sub-maker-sub
-
-# 4. (Optional but recommended) Open the necessary ports in your firewall
+# 3. Open the necessary ports in your firewall/provider security group
 # Example with ufw:
 sudo ufw allow 8964/tcp
 sudo ufw allow 443/tcp     # Reality
-sudo ufw allow 8443/tcp    # Hysteria2
+sudo ufw allow 8443/udp    # Hysteria2
 # ... add the other protocol ports you enabled
 
-# 5. Your Clash subscription is ready:
-# http://YOUR-SERVER-IP:8964/sub?token=YOUR-TOKEN
+# 4. Inspect final links and health
+sudo sub-maker links
+sudo sub-maker doctor
 ```
 
 In Clash, Clash Meta, Stash, etc., add the URL above as a subscription source. It will contain all your enabled nodes plus a rich set of routing rules.
@@ -123,13 +116,18 @@ See `.github/workflows/release.yml` for details.
 
 ### Commands
 
-| Flag       | Description                                      | Example                     |
-|------------|--------------------------------------------------|-----------------------------|
-| `--setup`  | Launch the TUI wizard (or DEMO mode) and apply the configuration | `sudo sub-maker --setup` (real) or `SUB_MAKER_DEMO=1 sub-maker --setup` (no sudo) |
-| `--serve`  | Run the subscription HTTP server on the configured port (default 8964) | `./sub-maker --serve`      |
-| `--nodes`  | Print the current node URIs (demo output if no real config) | `./sub-maker --nodes`      |
-| `--update` | (Planned) Update sing-box and subconverter binaries | `./sub-maker --update`     |
-| `--version`| Print version                                    | `./sub-maker --version`    |
+| Command / Flag | Description | Example |
+|---|---|---|
+| `setup` / `--setup` | Launch the production-first TUI wizard and apply configuration | `sudo sub-maker setup` |
+| `serve` / `--serve` | Run the subscription HTTP server | `sub-maker serve` |
+| `nodes` / `--nodes` | Print generated node URIs from `/etc/sub-maker/nodes.txt` | `sudo sub-maker nodes` |
+| `links` | Print subscription, raw node, and IP fallback URLs | `sudo sub-maker links` |
+| `doctor` | Check config, nodes, DNS, certs, services, and local subscription endpoint | `sudo sub-maker doctor` |
+| `status` | Show systemd status for sing-box and sub-maker-sub | `sudo sub-maker status` |
+| `restart` | Restart sing-box and sub-maker-sub | `sudo sub-maker restart` |
+| `start` / `stop` | Start or stop managed services | `sudo sub-maker start` |
+| `--update` | (Planned) Update sing-box and subconverter binaries | `sub-maker --update` |
+| `--version` | Print version | `sub-maker --version` |
 
 Environment variables (useful for scripting / containers):
 
@@ -138,28 +136,29 @@ Environment variables (useful for scripting / containers):
 - `SUB_MAKER_PORT=8964` — Override the subscription listen port.
 - `SUB_MAKER_NODES_FILE=/path/to/nodes.txt` — Override the nodes file used by the server (useful for testing or custom locations).
 
-### Post-Setup Steps (Real Installation)
+### Post-Setup Checks
 
-After a successful real `--setup`:
+After a successful real setup, services are already started and the local subscription endpoint has been verified. Useful commands:
 
-1. `sudo systemctl daemon-reload`
-2. `sudo systemctl enable --now sing-box subconverter sub-maker-sub`
-3. Check status: `sudo systemctl status sing-box sub-maker-sub`
-4. View logs: `sudo journalctl -u sub-maker-sub -f`
-5. Test the subscription locally on the VPS: `curl 'http://127.0.0.1:8964/sub?token=YOUR-TOKEN' | head -c 500`
-6. From a client outside, use the public URL (replace IP with your domain if you have one).
+```bash
+sudo sub-maker links
+sudo sub-maker doctor
+sudo sub-maker status
+sudo journalctl -u sub-maker-sub -f
+```
 
 **Important**: Re-run `sudo ./sub-maker --setup` if you want to change protocols, ports, credentials, or re-obtain certificates. It is safe and will back up / overwrite as needed.
 
-### Certificate Notes
+### DNS And Certificate Notes
 
-- If you provided a domain and chose ACME mode, the tool will attempt to obtain a certificate using acme.sh during `--setup`.
-- HTTP-01 requires port 80 to be free during issuance (the tool uses `--standalone`).
-- Cloudflare DNS-01 requires a valid `CF_Token` (you will be prompted in the TUI).
-- Certificates are copied to `/etc/sub-maker/certs/{fullchain.pem,privkey.pem}` and referenced in the sing-box config for TLS-based protocols.
-- For Reality, a real certificate on the server is **not required** (it borrows the TLS of a public site).
-
-If issuance fails, you can run acme.sh manually later and re-run `--setup` (or manually place the certs and restart services).
+- Production mode requires a domain whose DNS points to the detected server IP. If it does not, setup prints the exact `A` or `AAAA` record to create.
+- Hysteria2, TUIC, and AnyTLS require readable certificate files.
+- Reality does not require a local server certificate, but uses a separate camouflage target domain.
+- Shadowsocks 2022 does not require certificates.
+- Certbot HTTP-01 is the recommended certificate strategy. It requires DNS to be correct and port 80 to be free during issuance.
+- acme.sh HTTP-01 and Cloudflare DNS-01 remain available.
+- Existing cert mode validates cert/key files and domain coverage before continuing.
+- Certificates are copied or generated at `/etc/sub-maker/certs/{fullchain.pem,privkey.pem}` and referenced by sing-box.
 
 ### Using the Raw Nodes
 
@@ -189,12 +188,12 @@ Example: `http://your-server:8964/raw?token=YOUR-TOKEN`
 ## Troubleshooting
 
 - **No nodes found / empty subscription**: Make sure you ran `--setup` successfully and the token is correct. Check `/etc/sub-maker/nodes.txt`.
-- **Certificate errors**: For HTTP-01, ensure nothing else is listening on port 80 during issuance. Use DNS-01 if port 80 is problematic. Check acme.sh logs in `~/.acme.sh/`.
+- **Certificate errors**: For HTTP-01, ensure DNS points to this server and nothing else is listening on port 80 during issuance. Use DNS-01 if port 80 is problematic. Check Certbot output or acme.sh logs in `~/.acme.sh/`.
 - **Connection refused on 8964**: The sub-maker-sub unit may not be running. Check `systemctl status sub-maker-sub`.
 - **Clients can't connect to protocols**: Verify firewall / security group rules, that the correct ports are in the sing-box config, and that the client is using the exact share links from `/raw` or the subscription.
 - **Hysteria2 / TUIC / AnyTLS performance issues**: These benefit from a domain + real certificate. Reality works well even without.
 - **Demo mode vs real**: In demo the paths are under `/tmp/...` and services are not really started. Use real mode on a VPS for production.
-- **sing-box fails to start**: Check `journalctl -u sing-box -xe`. Common causes: port conflicts, missing cert files for TLS protocols, bad Reality public key (the setup prints a placeholder — you usually run `sing-box generate reality-keypair` once and put the private key in the config / public key in client links).
+- **sing-box fails to start**: Check `journalctl -u sing-box -xe`. Common causes: port conflicts, missing cert files for TLS protocols, or firewall/provider port blocks. Setup now generates Reality keypairs automatically.
 
 ## Development
 

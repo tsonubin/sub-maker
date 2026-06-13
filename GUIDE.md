@@ -85,10 +85,10 @@ All run inside sing-box. The subscription endpoint (port 8964 by default) is pow
 3. **Open the ports you will use**
    You can do this after running the wizard (it will print the ports). Typical defaults:
    - 443/tcp (Reality + often also used for other things)
-   - 8443/tcp (Hysteria2)
-   - 9443/tcp (TUIC)
+   - 8443/udp (Hysteria2)
+   - 9443/udp (TUIC)
    - 7443/tcp (AnyTLS)
-   - 8388/tcp (SS2022)
+   - 8388/tcp and 8388/udp (SS2022)
    - 8964/tcp (the subscription endpoint — you can change this)
    - 80/tcp (temporary, only during ACME HTTP-01 if you choose that method)
 
@@ -96,7 +96,7 @@ All run inside sing-box. The subscription endpoint (port 8964 by default) is pow
    ```bash
    sudo ufw allow 8964/tcp
    sudo ufw allow 443/tcp
-   sudo ufw allow 8443/tcp
+   sudo ufw allow 8443/udp
    # ... etc
    sudo ufw reload
    ```
@@ -187,11 +187,13 @@ The TUI will guide you through:
    - Remark / display name that will appear in clients.
    - SNI / target domain (important for TLS camouflage and Reality).
    - Passwords / UUIDs (auto-generated or you can paste your own).
-   - For Reality: shortId (auto or manual) and you will later provide the public key.
+   - For Reality: camouflage target domain and shortId. The keypair is generated automatically during setup if you do not provide one.
 
 5. **Certificate strategy**
-   - `acme-http` — easiest if port 80 is free on the VPS.
+   - `certbot-http` — recommended if DNS points to this VPS and port 80 is free.
+   - `acme-http` — alternate HTTP-01 path through acme.sh.
    - `acme-dns-cf` — best if you use Cloudflare for DNS (you will be asked for a CF API token with DNS edit rights).
+   - `existing` — validate and use an existing cert/key pair.
    - `self-signed` — quick but less ideal for TLS protocols (Reality does not need a server cert).
 
 After you confirm, the tool will:
@@ -199,10 +201,12 @@ After you confirm, the tool will:
 - Download the latest sing-box and a compatible subconverter.
 - Generate all node URIs and write `/etc/sub-maker/nodes.txt`.
 - Render and write a clean sing-box configuration.
-- Attempt to obtain certificates via acme.sh (if you chose ACME and provided a domain).
+- Check DNS and obtain or validate certificates when selected protocols require them.
 - Download a rich ACL4SSR rules file.
 - Write systemd unit files.
-- Print a summary with the exact subscription URL and the next commands you should run.
+- Start sing-box and the subscription server.
+- Verify the local subscription endpoint.
+- Print a summary with the exact subscription URL and operational commands.
 
 **Demo mode (for testing without root or on your laptop)**
 
@@ -212,17 +216,23 @@ SUB_MAKER_DEMO=1 ./sub-maker --setup
 
 This uses `/tmp/sub-maker-demo-etc/...` paths and does not start real services. Very useful for verifying the flow or for CI.
 
-## Certificate Setup (ACME)
+## Certificate Setup
 
-### HTTP-01 (Standalone)
+### Certbot HTTP-01 (Recommended)
 
 - Requires that port 80 is not occupied by another service during issuance.
-- The tool uses `acme.sh --standalone`.
+- Requires the domain's DNS record to point at the VPS public IP.
+- The tool runs `certbot certonly --standalone` and copies certs to `/etc/sub-maker/certs/`.
+
+### acme.sh HTTP-01
+
+- Alternate HTTP-01 method using `acme.sh --standalone`.
+- Also requires DNS to point at the VPS and port 80 to be free.
 - After successful issuance, certificates are copied to `/etc/sub-maker/certs/`.
 
-If you later add more subdomains or need to renew, you can re-run the wizard or run acme.sh commands manually.
+If you later add more subdomains or need to renew, you can re-run the wizard or run Certbot/acme.sh commands manually.
 
-### Cloudflare DNS-01 (Recommended for most users)
+### Cloudflare DNS-01
 
 1. In the Cloudflare dashboard, go to the domain → API Tokens → Create Token → "Edit zone DNS" template.
 2. Restrict it to the specific zone (your domain) and give it DNS:Edit permission.
@@ -237,28 +247,23 @@ After certificates are obtained, the sing-box config for the TLS protocols (Hyst
 
 ## Starting and Managing Services
 
-After `--setup` finishes, run:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now sing-box subconverter sub-maker-sub
-```
+After real `--setup` finishes successfully, services are already started and the subscription endpoint has been verified.
 
 Useful commands:
 
 ```bash
-# Status
-sudo systemctl status sing-box sub-maker-sub
+sudo sub-maker links
+sudo sub-maker doctor
+sudo sub-maker status
+sudo sub-maker restart
+```
 
-# Logs (follow)
+Raw systemd commands still work:
+
+```bash
+sudo systemctl status sing-box sub-maker-sub
 sudo journalctl -u sub-maker-sub -f
 sudo journalctl -u sing-box -f
-
-# Restart everything
-sudo systemctl restart sing-box subconverter sub-maker-sub
-
-# Stop
-sudo systemctl stop sing-box sub-maker-sub
 ```
 
 The subconverter unit runs on localhost:25500 by default (not exposed to the internet). You can use it directly if you want to experiment with custom subconverter configurations.
@@ -271,10 +276,11 @@ Minimal example with `ufw` (adjust ports to what you actually enabled):
 sudo ufw allow 22/tcp          # SSH - do not forget this!
 sudo ufw allow 8964/tcp        # Subscription
 sudo ufw allow 443/tcp         # Reality (and often a good general port)
-sudo ufw allow 8443/tcp        # Hysteria2
-sudo ufw allow 9443/tcp        # TUIC
+sudo ufw allow 8443/udp        # Hysteria2
+sudo ufw allow 9443/udp        # TUIC
 sudo ufw allow 7443/tcp        # AnyTLS
 sudo ufw allow 8388/tcp        # SS2022
+sudo ufw allow 8388/udp        # SS2022 UDP
 sudo ufw --force enable
 sudo ufw status
 ```
@@ -313,9 +319,11 @@ Import them individually in clients that support the URI scheme.
 
 ## Daily Operations and Maintenance
 
-- **Reconfiguring**: Just run `sudo ./sub-maker --setup` again. Change whatever you want (add/remove protocols, change ports, rotate credentials, switch certificate mode). Services will need to be restarted afterward.
-- **Renewing certificates**: acme.sh usually installs a cron job. You can also force a renew with `~/.acme.sh/acme.sh --renew -d your.domain.com` and then restart the relevant services.
-- **Viewing current nodes**: `sudo ./sub-maker --nodes` or `curl 'http://127.0.0.1:8964/raw?token=...'`.
+- **Reconfiguring**: Run `sudo sub-maker setup` again. The setup flow rewrites configs and restarts/verifies services.
+- **Health checks**: Run `sudo sub-maker doctor`.
+- **Viewing links**: Run `sudo sub-maker links`.
+- **Renewing certificates**: Certbot usually installs a timer; acme.sh usually installs a cron job. You can also renew manually and then run `sudo sub-maker restart`.
+- **Viewing current nodes**: `sudo sub-maker nodes` or `curl 'http://127.0.0.1:8964/raw?token=...'`.
 - **Updating binaries**: Re-run setup or (when implemented) use `--update`. You can also manually download newer sing-box / subconverter releases and replace the files in `/usr/local/bin` and `/opt/subconverter`, then restart units.
 - **Backup**: The important files are under `/etc/sub-maker/` (especially `config.yaml` and `nodes.txt`) and your sing-box config. Back them up before major changes.
 
@@ -330,16 +338,16 @@ Import them individually in clients that support the URI scheme.
 ### Certificate issuance fails
 
 - For HTTP-01: nothing else should be listening on port 80. Temporarily stop any web server or use a different port for testing.
-- Check the output of the acme.sh command (the tool prints it).
+- Check the output of Certbot or acme.sh (the tool prints it).
 - DNS-01 requires a correct Cloudflare token with zone edit rights.
 - After manual fixes, re-run `--setup`.
 
 ### sing-box fails to start after setup
 
 Common causes:
-- Missing certificate files for TLS protocols → run acme step or use self-signed + update the config.
+- Missing certificate files for TLS protocols → use Certbot/acme.sh, existing cert mode, or self-signed mode and rerun setup.
 - Port already in use (another service or previous sing-box instance).
-- Bad Reality configuration (wrong private key format, etc.). The setup currently puts a placeholder for the private key — you usually need to generate one with `sing-box generate reality-keypair` and insert the private key into the sing-box config and the public key into client links.
+- Bad Reality configuration (wrong private key format, etc.). Setup now generates Reality keypairs automatically; rerun setup if generated config and node links drift.
 
 Check logs: `journalctl -u sing-box -xe`
 

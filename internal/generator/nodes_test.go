@@ -16,7 +16,7 @@ func TestGenerateAll_Top5Formats(t *testing.T) {
 		"ss2022":    8388,
 	}
 	creds := map[string]map[string]string{
-		"reality": {"sni": "www.apple.com", "pbk": "testpbk1234567890abcdef", "short_id": "01234567"},
+		"reality":   {"sni": "www.apple.com", "pbk": "testpbk1234567890abcdef", "short_id": "01234567"},
 		"hysteria2": {"sni": "example.com"},
 		"tuic":      {"sni": "example.com"},
 		"anytls":    {"sni": "example.com"},
@@ -73,5 +73,24 @@ func TestWriteNodesFile(t *testing.T) {
 	lines, _ := LoadNodesFromFile(path)
 	if len(lines) != 2 {
 		t.Errorf("expected 2 lines, got %d", len(lines))
+	}
+}
+
+func TestGenerateSelectedFiltersProtocols(t *testing.T) {
+	ports := map[string]int{
+		"reality":   443,
+		"hysteria2": 8443,
+		"tuic":      9443,
+		"anytls":    7443,
+		"ss2022":    8388,
+	}
+	nodes := GenerateSelected("1.2.3.4", "example.com", []string{"reality", "ss2022"}, ports, map[string]map[string]string{
+		"reality": {"sni": "www.apple.com", "pbk": "testpbk", "short_id": "01234567"},
+	})
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 selected nodes, got %d", len(nodes))
+	}
+	if nodes[0].Protocol != "vless-reality" || nodes[1].Protocol != "ss2022" {
+		t.Fatalf("unexpected protocols: %#v", nodes)
 	}
 }

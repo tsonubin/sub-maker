@@ -7,13 +7,17 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
 
 	"github.com/tsonubin/sub-maker/internal/assets"
 	"github.com/tsonubin/sub-maker/internal/config"
+	"github.com/tsonubin/sub-maker/internal/diagnostics"
 	"github.com/tsonubin/sub-maker/internal/generator"
 	"gopkg.in/yaml.v3"
 )
@@ -52,36 +56,50 @@ func Apply(cfg *config.SetupConfig) error {
 		}
 	}
 
-	// 1. Generate and write nodes.txt (used by subconverter file:// )
-	nodes := generator.GenerateAll(cfg.ServerAddr, cfg.Domain, cfg.Ports, cfg.Creds)
-	nodesPath := filepath.Join(etcSub, "nodes.txt")
-	if err := generator.WriteNodesFile(nodesPath, nodes); err != nil {
-		return fmt.Errorf("write nodes: %w", err)
-	}
-	slog.Info("wrote nodes.txt", "count", len(nodes))
-
-	// 2. Download binaries (real)
+	// 1. Download binaries before generating runtime-dependent config such as Reality keypairs.
 	slog.Info("downloading sing-box...")
 	if err := DownloadSingBox(""); err != nil {
 		slog.Warn("sing-box download failed (may already exist or network)", "err", err)
-		// continue for demo
 	}
 	slog.Info("downloading subconverter...")
 	if err := DownloadSubconverter(""); err != nil {
 		slog.Warn("subconverter download failed", "err", err)
 	}
 
-	// 3. Render and write sing-box config using templates + data
+	// 2. Certs before render, so sing-box config points at real files.
+	if err := ensureCertificates(cfg); err != nil {
+		return err
+	}
+
+	// 3. Runtime credentials before rendering and node generation.
+	if err := ensureRuntimeCredentials(cfg); err != nil {
+		return err
+	}
+
+	// 4. Render and write sing-box config using templates + data.
 	if err := renderSingBoxConfig(cfg, etcSB); err != nil {
 		return fmt.Errorf("render sing-box config: %w", err)
 	}
 
-	// 4. Write subconverter files (pref + rules)
+	// 5. Generate and write selected nodes.txt.
+	nodes := generator.GenerateSelected(cfg.ServerAddr, cfg.Domain, cfg.EnabledProtocols, cfg.Ports, cfg.Creds)
+	nodesPath := filepath.Join(etcSub, "nodes.txt")
+	if err := generator.WriteNodesFile(nodesPath, nodes); err != nil {
+		return fmt.Errorf("write nodes: %w", err)
+	}
+	slog.Info("wrote nodes.txt", "count", len(nodes))
+
+	// 6. Write subconverter files (pref + rules).
 	if err := setupSubconverterFiles(etcSub, optSC); err != nil {
 		slog.Warn("subconverter files", "err", err)
 	}
 
-	// 5. Write sub-maker config.yaml
+	// 7. Write systemd units.
+	if err := writeSystemdUnits(cfg, nodesPath); err != nil {
+		return fmt.Errorf("write systemd units: %w", err)
+	}
+
+	// 8. Write sub-maker config.yaml.
 	cfg.UpdatedAt = time.Now()
 	if cfg.CreatedAt.IsZero() {
 		cfg.CreatedAt = cfg.UpdatedAt
@@ -92,46 +110,196 @@ func Apply(cfg *config.SetupConfig) error {
 		return err
 	}
 
-	// 6. Write systemd units (using templates)
-	if err := writeSystemdUnits(cfg, etcSub); err != nil {
-		slog.Warn("systemd units", "err", err)
-	}
-
-	// 7. Certs (via acme.sh)
-	if os.Getenv("SUB_MAKER_DEMO") == "" && cfg.Domain != "" && cfg.CertMode != "self-signed" {
-		slog.Info("obtaining cert via acme.sh for " + cfg.Domain)
-		if err := EnsureAcme(cfg.Domain, cfg.Email, cfg.CertMode, cfg.ACMETokenCF); err != nil {
-			slog.Warn("acme failed, certs may not be ready - run manually or use self-signed", "err", err)
-		} else {
-			if err := CopyCertsToEtc(cfg.Domain); err != nil {
-				slog.Warn("copy certs failed", "err", err)
-			} else {
-				cfg.CertPath = "/etc/sub-maker/certs/fullchain.pem"
-				cfg.KeyPath = "/etc/sub-maker/certs/privkey.pem"
-				slog.Info("certs ready at " + cfg.CertPath)
-			}
+	if os.Getenv("SUB_MAKER_DEMO") == "" {
+		if err := startAndVerifyServices(cfg); err != nil {
+			return err
 		}
-	} else if cfg.Domain != "" && cfg.CertMode == "self-signed" {
-		slog.Info("self-signed cert mode selected - generate manually if needed for TLS protocols")
 	}
 
-	// 8. Firewall hint
+	// 9. Firewall hint
 	slog.Info("firewall: ensure ports open", "sub", cfg.SubPort, "others", cfg.Ports)
 
+	links := diagnostics.BuildLinks(cfg)
 	fmt.Printf("\n=== APPLY COMPLETE ===\n")
 	fmt.Printf("Nodes: %s\n", nodesPath)
 	fmt.Printf("sing-box config: %s/config.json\n", etcSB)
-	fmt.Printf("subconverter: %s (run manually or via its unit for now)\n", optSC)
+	fmt.Printf("subconverter: %s\n", optSC)
 	fmt.Printf("sub-maker config: %s\n", cfgPath)
-	fmt.Printf("\nYour Clash subscription (after starting services):\n")
-	fmt.Printf("  http://%s:%d/sub?token=%s\n", cfg.ServerAddr, cfg.SubPort, cfg.SubToken)
-	fmt.Printf("\nNext manual steps (or enhance Apply):\n")
-	fmt.Printf("  systemctl daemon-reload\n")
-	fmt.Printf("  systemctl enable --now sing-box subconverter sub-maker-sub\n")
-	fmt.Printf("  (install acme.sh if needed and issue certs for TLS inbounds)\n")
-	fmt.Printf("  ufw allow %d/tcp %d/tcp etc.\n", cfg.SubPort, cfg.Ports["reality"])
+	fmt.Printf("\nSubscription:\n  %s\n", links.Subscription)
+	fmt.Printf("Raw nodes:\n  %s\n", links.Raw)
+	if cfg.Domain != "" && cfg.ServerAddr != "" {
+		fmt.Printf("IP fallback:\n  %s\n", links.IPFallback)
+	}
+	fmt.Printf("\nCommands:\n")
+	fmt.Printf("  sudo sub-maker status\n")
+	fmt.Printf("  sudo sub-maker links\n")
+	fmt.Printf("  sudo sub-maker doctor\n")
+	fmt.Printf("  sudo sub-maker restart\n")
+	fmt.Printf("Open firewall ports:\n")
+	for _, rule := range firewallRules(cfg) {
+		fmt.Printf("  ufw allow %d/%s  # %s\n", rule.Port, rule.Transport, rule.Label)
+	}
 
 	return nil
+}
+
+type firewallRule struct {
+	Port      int
+	Transport string
+	Label     string
+}
+
+func firewallRules(cfg *config.SetupConfig) []firewallRule {
+	rules := []firewallRule{{Port: cfg.SubPort, Transport: "tcp", Label: "subscription"}}
+	for _, protocol := range cfg.EnabledProtocols {
+		port := cfg.Ports[protocol]
+		if port <= 0 {
+			continue
+		}
+		switch protocol {
+		case "hysteria2", "tuic":
+			rules = append(rules, firewallRule{Port: port, Transport: "udp", Label: protocol})
+		case "ss2022":
+			rules = append(rules,
+				firewallRule{Port: port, Transport: "tcp", Label: protocol},
+				firewallRule{Port: port, Transport: "udp", Label: protocol},
+			)
+		default:
+			rules = append(rules, firewallRule{Port: port, Transport: "tcp", Label: protocol})
+		}
+	}
+	return rules
+}
+
+func ensureCertificates(cfg *config.SetupConfig) error {
+	if !diagnostics.ProtocolsRequireLocalCert(cfg.EnabledProtocols) {
+		return nil
+	}
+	if cfg.CertPath != "" && cfg.KeyPath != "" && cfg.CertMode == config.CertStrategyExisting {
+		return diagnostics.ValidateCertificatePair(cfg.CertPath, cfg.KeyPath, cfg.Domain)
+	}
+
+	certPath := "/etc/sub-maker/certs/fullchain.pem"
+	keyPath := "/etc/sub-maker/certs/privkey.pem"
+	if os.Getenv("SUB_MAKER_DEMO") != "" {
+		certPath = "/tmp/sub-maker-demo-etc/sub-maker/certs/fullchain.pem"
+		keyPath = "/tmp/sub-maker-demo-etc/sub-maker/certs/privkey.pem"
+	}
+
+	switch cfg.CertMode {
+	case config.CertStrategyCertbotHTTP:
+		if os.Getenv("SUB_MAKER_DEMO") == "" {
+			if err := EnsureCertbot(cfg.Domain, cfg.Email); err != nil {
+				return err
+			}
+			if err := CopyCertbotCertsToEtc(cfg.Domain); err != nil {
+				return err
+			}
+		} else if err := GenerateSelfSignedCert(cfg.Domain, cfg.ServerAddr); err != nil {
+			return err
+		}
+	case config.CertStrategyACMEHTTP, config.CertStrategyACMEDNSCF:
+		if os.Getenv("SUB_MAKER_DEMO") == "" {
+			if err := EnsureAcme(cfg.Domain, cfg.Email, cfg.CertMode, cfg.ACMETokenCF); err != nil {
+				return err
+			}
+			if err := CopyCertsToEtc(cfg.Domain); err != nil {
+				return err
+			}
+		} else if err := GenerateSelfSignedCert(cfg.Domain, cfg.ServerAddr); err != nil {
+			return err
+		}
+	case config.CertStrategySelfSigned:
+		if err := GenerateSelfSignedCert(cfg.Domain, cfg.ServerAddr); err != nil {
+			return err
+		}
+	case config.CertStrategyExisting:
+		return diagnostics.ValidateCertificatePair(cfg.CertPath, cfg.KeyPath, cfg.Domain)
+	default:
+		return fmt.Errorf("unsupported certificate strategy: %s", cfg.CertMode)
+	}
+
+	cfg.CertPath = certPath
+	cfg.KeyPath = keyPath
+	return diagnostics.ValidateCertificatePair(cfg.CertPath, cfg.KeyPath, cfg.Domain)
+}
+
+func ensureRuntimeCredentials(cfg *config.SetupConfig) error {
+	if cfg.Creds == nil {
+		cfg.Creds = make(map[string]map[string]string)
+	}
+	if !protocolEnabled(cfg.EnabledProtocols, "reality") {
+		return nil
+	}
+	creds := cfg.Creds["reality"]
+	if creds == nil {
+		creds = map[string]string{}
+		cfg.Creds["reality"] = creds
+	}
+	if creds["private_key"] != "" && creds["pbk"] != "" {
+		return nil
+	}
+	privateKey, publicKey, err := generateRealityKeypair()
+	if err != nil {
+		return err
+	}
+	creds["private_key"] = privateKey
+	creds["pbk"] = publicKey
+	return nil
+}
+
+func generateRealityKeypair() (string, string, error) {
+	binary := "/usr/local/bin/sing-box"
+	if os.Getenv("SUB_MAKER_DEMO") != "" {
+		if home := os.Getenv("HOME"); home != "" {
+			binary = filepath.Join(home, ".local/bin/sing-box")
+		}
+	}
+	if _, err := os.Stat(binary); err != nil {
+		if found, lookErr := exec.LookPath("sing-box"); lookErr == nil {
+			binary = found
+		}
+	}
+	cmd := exec.Command(binary, "generate", "reality-keypair")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", "", fmt.Errorf("generate reality keypair: %w\n%s", err, string(out))
+	}
+	privateKey := extractKeyLine(string(out), `(?i)private(?:\s+key)?:\s*([A-Za-z0-9_-]+)`)
+	publicKey := extractKeyLine(string(out), `(?i)public(?:\s+key)?:\s*([A-Za-z0-9_-]+)`)
+	if privateKey == "" || publicKey == "" {
+		return "", "", fmt.Errorf("could not parse sing-box reality keypair output: %s", string(out))
+	}
+	return privateKey, publicKey, nil
+}
+
+func extractKeyLine(output, pattern string) string {
+	re := regexp.MustCompile(pattern)
+	matches := re.FindStringSubmatch(output)
+	if len(matches) < 2 {
+		return ""
+	}
+	return matches[1]
+}
+
+func protocolEnabled(protocols []string, protocol string) bool {
+	for _, value := range protocols {
+		if value == protocol {
+			return true
+		}
+	}
+	return false
+}
+
+func startAndVerifyServices(cfg *config.SetupConfig) error {
+	if err := diagnostics.RunSystemctl("daemon-reload"); err != nil {
+		return err
+	}
+	if err := diagnostics.RunSystemctl("enable", "--now", "sing-box", "sub-maker-sub"); err != nil {
+		return err
+	}
+	localURL := fmt.Sprintf("http://127.0.0.1:%d/sub?token=%s", cfg.SubPort, cfg.SubToken)
+	return diagnostics.VerifySubscriptionEndpoint(localURL)
 }
 
 func readTemplate(name string) ([]byte, error) {
@@ -189,7 +357,7 @@ func renderSingBoxConfig(cfg *config.SetupConfig, etcSB string) error {
 		case "reality":
 			tplName = "inbound_reality.json.tpl"
 			data["UUID"] = creds["uuid"]
-			data["PrivateKey"] = "REPLACE_WITH_sing-box_generate_reality-keypair" // user or setup should run sing-box generate
+			data["PrivateKey"] = creds["private_key"]
 			data["ShortID"] = creds["short_id"]
 		case "hysteria2":
 			tplName = "inbound_hysteria2.json.tpl"
@@ -251,16 +419,23 @@ func setupSubconverterFiles(etcSub, optSC string) error {
 	return nil
 }
 
-func writeSystemdUnits(cfg *config.SetupConfig, etcSub string) error {
+func writeSystemdUnits(cfg *config.SetupConfig, nodesPath string) error {
 	unitNames := []string{"sing-box.service", "subconverter.service", "sub-maker-sub.service"}
 	for _, name := range unitNames {
 		content, err := readTemplate("templates/" + name + ".tpl")
 		if err != nil {
+			if name == "sub-maker-sub.service" {
+				return fmt.Errorf("required unit template missing: %s", name)
+			}
 			content = []byte("[Unit]\nDescription=" + name + "\n[Service]\nExecStart=/bin/true\n")
 		}
 		t, _ := template.New(name).Parse(string(content))
 		var buf bytes.Buffer
-		t.Execute(&buf, map[string]string{"Token": cfg.SubToken})
+		t.Execute(&buf, map[string]string{
+			"Token":     cfg.SubToken,
+			"Port":      strconv.Itoa(cfg.SubPort),
+			"NodesPath": nodesPath,
+		})
 		// for demo, write to /tmp if no perm
 		path := "/etc/systemd/system/" + name
 		if os.Getenv("SUB_MAKER_DEMO") != "" {
@@ -276,4 +451,3 @@ func writeSystemdUnits(cfg *config.SetupConfig, etcSub string) error {
 }
 
 // downloadFile and extract... are in downloader.go
-

@@ -26,11 +26,18 @@ func randomShortID() string {
 	return hex.EncodeToString(b)
 }
 
-// randomPass returns a base64 password suitable for many protos (Hy2, AnyTLS, SS).
+// randomPass returns a URL-safe secret suitable for protocols that treat it as an opaque password.
 func randomPass() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return base64.RawStdEncoding.EncodeToString(b)
+}
+
+// randomSS2022Pass returns a method-sized key for 2022-blake3-aes-128-gcm.
+func randomSS2022Pass() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // GenerateVLESSReality produces a VLESS + Reality-Vision link.
@@ -106,7 +113,7 @@ func GenerateAnyTLS(serverAddr string, port int, password, sni string, remark st
 // GenerateSS2022 produces a Shadowsocks 2022 (AEAD) link. Method 2022-blake3-aes-128-gcm or 256.
 func GenerateSS2022(serverAddr string, port int, password, method string, remark string) string {
 	if password == "" {
-		password = randomPass()
+		password = randomSS2022Pass()
 	}
 	if method == "" {
 		method = "2022-blake3-aes-128-gcm"
@@ -257,6 +264,29 @@ func GenerateAll(serverAddr, baseDomain string, ports map[string]int, creds map[
 	return nodes
 }
 
+func GenerateSelected(serverAddr, baseDomain string, selected []string, ports map[string]int, creds map[string]map[string]string) []Node {
+	if len(selected) == 0 {
+		return GenerateAll(serverAddr, baseDomain, ports, creds)
+	}
+	allowed := make(map[string]bool, len(selected))
+	for _, protocol := range selected {
+		switch protocol {
+		case "reality":
+			allowed["vless-reality"] = true
+		default:
+			allowed[protocol] = true
+		}
+	}
+	all := GenerateAll(serverAddr, baseDomain, ports, creds)
+	out := make([]Node, 0, len(selected))
+	for _, node := range all {
+		if allowed[node.Protocol] {
+			out = append(out, node)
+		}
+	}
+	return out
+}
+
 // WriteNodesFile writes one URI per line (suitable for subconverter file:// source).
 func WriteNodesFile(path string, nodes []Node) error {
 	var b strings.Builder
@@ -278,4 +308,3 @@ func LoadNodesFromFile(path string) ([]string, error) {
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	return lines, nil
 }
-
