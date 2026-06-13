@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,12 @@ func RunWizard() (*config.SetupConfig, error) {
 	// 1. Welcome + global info
 	var serverAddr, domain, email, token, subPortStr string
 	var subPort int
+	if detectedIP, err := DetectPublicIP(context.Background()); err == nil {
+		serverAddr = detectedIP
+		slog.Info("detected server public IP", "ip", detectedIP)
+	} else {
+		slog.Info("could not auto-detect server public IP", "err", err)
+	}
 
 	form := huh.NewForm(
 		huh.NewGroup(
