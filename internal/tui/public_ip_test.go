@@ -13,7 +13,7 @@ func TestDetectPublicIPUsesFirstPublicResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ip, err := detectPublicIP(context.Background(), server.Client(), []string{server.URL})
+	ip, err := detectPublicIP(context.Background(), server.Client(), []publicIPEndpoint{{url: server.URL}})
 	if err != nil {
 		t.Fatalf("detectPublicIP returned error: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestDetectPublicIPFallsBackAfterPrivateResponse(t *testing.T) {
 	}))
 	defer publicServer.Close()
 
-	ip, err := detectPublicIP(context.Background(), privateServer.Client(), []string{privateServer.URL, publicServer.URL})
+	ip, err := detectPublicIP(context.Background(), privateServer.Client(), []publicIPEndpoint{{url: privateServer.URL}, {url: publicServer.URL}})
 	if err != nil {
 		t.Fatalf("detectPublicIP returned error: %v", err)
 	}

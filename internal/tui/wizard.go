@@ -20,8 +20,12 @@ func RunWizard() (*config.SetupConfig, error) {
 	// 1. Welcome + global info
 	var serverAddr, domain, email, token, subPortStr string
 	var subPort int
+	serverAddrPlaceholder := "1.2.3.4 or your.domain.com"
+	serverAddrDescription := "Used in generated client links and the subscription URL."
 	if detectedIP, err := DetectPublicIP(context.Background()); err == nil {
 		serverAddr = detectedIP
+		serverAddrPlaceholder = detectedIP
+		serverAddrDescription = "Detected: " + detectedIP + ". You can replace it with a domain."
 		slog.Info("detected server public IP", "ip", detectedIP)
 	} else {
 		slog.Info("could not auto-detect server public IP", "err", err)
@@ -32,7 +36,7 @@ func RunWizard() (*config.SetupConfig, error) {
 			huh.NewNote().
 				Title("sub-maker TUI").
 				Description("Setup top-5 GFW-resistant transports (VLESS-Reality, Hysteria2, TUICv5, AnyTLS, SS2022)\n+ Clash subscription with common ACL4SSR rulesets via subconverter on :8964."),
-			huh.NewInput().Title("Server public address (IP or domain for client links)").Value(&serverAddr).Placeholder("1.2.3.4 or your.domain.com"),
+			huh.NewInput().Title("Server public address (IP or domain for client links)").Description(serverAddrDescription).Value(&serverAddr).Placeholder(serverAddrPlaceholder),
 			huh.NewInput().Title("Domain for ACME certs + default SNI (recommended for real certs)").Value(&domain).Placeholder("your.domain.com"),
 			huh.NewInput().Title("ACME contact email").Value(&email).Placeholder("admin@example.com"),
 			huh.NewInput().Title("Subscription token (auto-generated if empty)").Value(&token).Placeholder("leave blank to auto-gen"),
