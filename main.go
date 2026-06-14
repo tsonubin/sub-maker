@@ -34,6 +34,7 @@ func main() {
 		fmt.Println("  SUB_MAKER_DEMO=1 sub-maker --setup")
 		fmt.Println("  sub-maker --serve")
 		fmt.Println("  sub-maker --nodes")
+		fmt.Println("  sudo sub-maker config")
 		fmt.Println("  sudo sub-maker doctor")
 		fmt.Println("  sudo sub-maker link")
 		fmt.Println("  sudo sub-maker links")
@@ -53,6 +54,8 @@ func main() {
 	switch {
 	case *setupCmd || command == "setup":
 		runSetup()
+	case command == "config" || command == "configure":
+		runConfig()
 	case *serveCmd || command == "serve":
 		if err := server.Run(); err != nil {
 			slog.Error("server failed", "err", err)
@@ -117,6 +120,23 @@ func runSetup() {
 			slog.Error("wizard failed", "err", err)
 			os.Exit(1)
 		}
+	}
+	if err := setup.Apply(cfg); err != nil {
+		slog.Error("apply failed", "err", err)
+		os.Exit(1)
+	}
+}
+
+func runConfig() {
+	cfg, err := cli.LoadConfig()
+	if err != nil {
+		slog.Error("load config failed; run setup first", "path", cli.ConfigPath(), "err", err)
+		os.Exit(1)
+	}
+	cfg, err = tui.RunConfigWizard(cfg)
+	if err != nil {
+		slog.Error("config wizard failed", "err", err)
+		os.Exit(1)
 	}
 	if err := setup.Apply(cfg); err != nil {
 		slog.Error("apply failed", "err", err)

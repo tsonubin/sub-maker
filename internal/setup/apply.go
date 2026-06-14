@@ -194,6 +194,15 @@ func ensureCertificates(cfg *config.SetupConfig) error {
 		certPath = "/tmp/sub-maker-demo-etc/sub-maker/certs/fullchain.pem"
 		keyPath = "/tmp/sub-maker-demo-etc/sub-maker/certs/privkey.pem"
 	}
+	if cfg.CertPath == "" {
+		cfg.CertPath = certPath
+	}
+	if cfg.KeyPath == "" {
+		cfg.KeyPath = keyPath
+	}
+	if err := diagnostics.ValidateCertificatePair(cfg.CertPath, cfg.KeyPath, cfg.Domain); err == nil {
+		return nil
+	}
 
 	switch cfg.CertMode {
 	case config.CertStrategyCertbotHTTP:

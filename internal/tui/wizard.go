@@ -302,8 +302,11 @@ func verifyDomainDNS(cfg *config.SetupConfig, expectedAddress string) error {
 }
 
 func collectCertStrategy(cfg *config.SetupConfig) error {
-	certMode := string(config.CertStrategyCertbotHTTP)
-	if cfg.SetupMode == config.SetupModeIPOnly {
+	certMode := string(cfg.CertMode)
+	if certMode == "" {
+		certMode = string(config.CertStrategyCertbotHTTP)
+	}
+	if cfg.SetupMode == config.SetupModeIPOnly && cfg.CertMode == "" {
 		certMode = string(config.CertStrategySelfSigned)
 	}
 	formC := huh.NewForm(

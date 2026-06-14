@@ -23,7 +23,7 @@ See the full usage below and GUIDE.md for details.
 - Certificate handling through Certbot HTTP-01, acme.sh HTTP-01/DNS-01, existing cert files, or self-signed fallback.
 - Built-in Clash subscription server on 8964 with rulesets.
 - Systemd service generation for easy deployment.
-- Operational commands: `doctor`, `link`, `links`, `status`, `restart`, `start`, `stop`.
+- Operational commands: `config`, `doctor`, `link`, `links`, `status`, `restart`, `start`, `stop`.
 - Demo mode for testing without root.
 
 See below for commands and GUIDE.md for full tutorial.
@@ -121,6 +121,7 @@ See `.github/workflows/release.yml` for details.
 | Command / Flag | Description | Example |
 |---|---|---|
 | `setup` / `--setup` | Launch the production-first TUI wizard and apply configuration | `sudo sub-maker setup` |
+| `config` / `configure` | Edit the existing setup, preserve current secrets by default, then reapply | `sudo sub-maker config` |
 | `serve` / `--serve` | Run the subscription HTTP server | `sub-maker serve` |
 | `nodes` / `--nodes` | Print generated node URIs from `/etc/sub-maker/nodes.txt` | `sudo sub-maker nodes` |
 | `link` | Print only the subscription URL after passcode verification, useful over SSH | `sudo sub-maker link` |
@@ -144,6 +145,7 @@ Environment variables (useful for scripting / containers):
 After a successful real setup, services are already started and the local subscription endpoint has been verified. Useful commands:
 
 ```bash
+sudo sub-maker config
 sudo sub-maker links
 sudo sub-maker link
 sudo sub-maker doctor
@@ -158,7 +160,7 @@ ssh root@YOUR-SERVER 'sub-maker link'
 printf '%s\n' 'YOUR-LINK-PASSCODE' | ssh root@YOUR-SERVER 'sub-maker link --passcode-stdin'
 ```
 
-**Important**: Re-run `sudo ./sub-maker --setup` if you want to change protocols, ports, credentials, or re-obtain certificates. It is safe and will back up / overwrite as needed.
+**Important**: Use `sudo sub-maker config` to change protocols, ports, credentials, certificate mode, token, or passcode after first setup. It loads the existing config, preserves current secrets when secret fields are left blank, reapplies generated files, and restarts/verifies services.
 
 ### DNS And Certificate Notes
 

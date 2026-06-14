@@ -253,6 +253,7 @@ After real `--setup` finishes successfully, services are already started and the
 Useful commands:
 
 ```bash
+sudo sub-maker config
 sudo sub-maker links
 sudo sub-maker link
 sudo sub-maker doctor
@@ -260,7 +261,7 @@ sudo sub-maker status
 sudo sub-maker restart
 ```
 
-Use `links` when you are administering the server and want the full subscription/raw/fallback set. Use `link` when retrieving the subscription over SSH; it asks for the setup passcode and prints only the subscription URL.
+Use `config` when changing an existing server after first setup. It pre-fills the current config, preserves existing secrets when secret fields are left blank, reapplies generated files, and restarts/verifies services. Use `links` when you are administering the server and want the full subscription/raw/fallback set. Use `link` when retrieving the subscription over SSH; it asks for the setup passcode and prints only the subscription URL.
 
 ```bash
 ssh root@your-server 'sub-maker link'
@@ -328,7 +329,7 @@ Import them individually in clients that support the URI scheme.
 
 ## Daily Operations and Maintenance
 
-- **Reconfiguring**: Run `sudo sub-maker setup` again. The setup flow rewrites configs and restarts/verifies services.
+- **Reconfiguring**: Run `sudo sub-maker config`. It loads the current config, preserves secrets by default, rewrites configs, and restarts/verifies services.
 - **Health checks**: Run `sudo sub-maker doctor`.
 - **SSH link retrieval**: Run `sudo sub-maker link` and enter the setup passcode.
 - **Viewing links**: Run `sudo sub-maker links`.
