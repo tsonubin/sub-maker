@@ -274,10 +274,14 @@ func generateRealityKeypair() (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("generate reality keypair: %w\n%s", err, string(out))
 	}
-	privateKey := extractKeyLine(string(out), `(?i)private(?:\s+key)?:\s*([A-Za-z0-9_-]+)`)
-	publicKey := extractKeyLine(string(out), `(?i)public(?:\s+key)?:\s*([A-Za-z0-9_-]+)`)
+	return parseRealityKeypairOutput(string(out))
+}
+
+func parseRealityKeypairOutput(output string) (string, string, error) {
+	privateKey := extractKeyLine(output, `(?i)private[\s_-]*key\s*:\s*([A-Za-z0-9_-]+)`)
+	publicKey := extractKeyLine(output, `(?i)public[\s_-]*key\s*:\s*([A-Za-z0-9_-]+)`)
 	if privateKey == "" || publicKey == "" {
-		return "", "", fmt.Errorf("could not parse sing-box reality keypair output: %s", string(out))
+		return "", "", fmt.Errorf("could not parse sing-box reality keypair output: %s", output)
 	}
 	return privateKey, publicKey, nil
 }
