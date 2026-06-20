@@ -94,7 +94,10 @@ func Apply(cfg *config.SetupConfig) error {
 	if cfg.CreatedAt.IsZero() {
 		cfg.CreatedAt = cfg.UpdatedAt
 	}
-	cfgBytes, _ := yaml.Marshal(cfg)
+	cfgBytes, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
 	cfgPath := filepath.Join(etcSub, "config.yaml")
 	if err := os.WriteFile(cfgPath, cfgBytes, 0640); err != nil {
 		return err
@@ -430,15 +433,25 @@ func renderSingBoxConfig(cfg *config.SetupConfig, etcSB string) error {
 		if err != nil {
 			tplContent = []byte(fmt.Sprintf(`{"type":"%s","listen":"::","listen_port":%d}`, proto, cfg.Ports[proto]))
 		}
-		t, _ := template.New(proto).Parse(string(tplContent))
+		t, err := template.New(proto).Parse(string(tplContent))
+		if err != nil {
+			return fmt.Errorf("parse %s template: %w", proto, err)
+		}
 		var buf bytes.Buffer
-		t.Execute(&buf, data)
+		if err := t.Execute(&buf, data); err != nil {
+			return fmt.Errorf("execute %s template: %w", proto, err)
+		}
 		inboundStrs = append(inboundStrs, buf.String())
 	}
 
-	t, _ := template.New("base").Parse(string(baseTpl))
+	t, err := template.New("base").Parse(string(baseTpl))
+	if err != nil {
+		return fmt.Errorf("parse sing-box base template: %w", err)
+	}
 	var out bytes.Buffer
-	t.Execute(&out, map[string]string{"Inbounds": strings.Join(inboundStrs, ",")})
+	if err := t.Execute(&out, map[string]string{"Inbounds": strings.Join(inboundStrs, ",")}); err != nil {
+		return fmt.Errorf("execute sing-box base template: %w", err)
+	}
 
 	var js map[string]interface{}
 	if err := json.Unmarshal(out.Bytes(), &js); err != nil {
@@ -452,14 +465,18 @@ func setupSubconverterFiles(etcSub, optSC string) error {
 	if err != nil || len(pref) == 0 {
 		pref = []byte("api_access_token=submaker123\n")
 	}
-	os.WriteFile(filepath.Join(optSC, "pref.ini"), pref, 0644)
+	if err := os.WriteFile(filepath.Join(optSC, "pref.ini"), pref, 0644); err != nil {
+		return err
+	}
 
 	// download a common ACL4SSR rules config for subconverter to use via &config=
 	aclURL := "https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/config/ACL4SSR_Online_Full.ini"
 	aclPath := filepath.Join(etcSub, "acl4ssr.ini")
 	if err := downloadFile(aclURL, aclPath); err != nil {
 		slog.Warn("could not download ACL rules, using minimal", "err", err)
-		os.WriteFile(aclPath, []byte("[custom]\n; add your rules here or use remote\n"), 0644)
+		if err := os.WriteFile(aclPath, []byte("[custom]\n; add your rules here or use remote\n"), 0644); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -474,13 +491,18 @@ func writeSystemdUnits(cfg *config.SetupConfig, nodesPath string) error {
 			}
 			content = []byte("[Unit]\nDescription=" + name + "\n[Service]\nExecStart=/bin/true\n")
 		}
-		t, _ := template.New(name).Parse(string(content))
+		t, err := template.New(name).Parse(string(content))
+		if err != nil {
+			return fmt.Errorf("parse unit template %s: %w", name, err)
+		}
 		var buf bytes.Buffer
-		t.Execute(&buf, map[string]string{
+		if err := t.Execute(&buf, map[string]string{
 			"Token":     cfg.SubToken,
 			"Port":      strconv.Itoa(cfg.SubPort),
 			"NodesPath": nodesPath,
-		})
+		}); err != nil {
+			return fmt.Errorf("execute unit template %s: %w", name, err)
+		}
 		path := "/etc/systemd/system/" + name
 		if config.DemoMode() {
 			path = filepath.Join("/tmp", name)

@@ -13,6 +13,8 @@ import (
 	"github.com/tsonubin/sub-maker/internal/config"
 )
 
+var cryptoRandRead = rand.Read
+
 // Node represents one generated inbound share link (in URI format subconverter understands).
 type Node struct {
 	Protocol string
@@ -23,21 +25,27 @@ type Node struct {
 // randomShortID returns 8 hex chars suitable for Reality sid.
 func randomShortID() string {
 	b := make([]byte, 4)
-	_, _ = rand.Read(b)
+	if _, err := cryptoRandRead(b); err != nil {
+		return strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	}
 	return hex.EncodeToString(b)
 }
 
 // randomPass returns a URL-safe secret suitable for protocols that treat it as an opaque password.
 func randomPass() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := cryptoRandRead(b); err != nil {
+		return uuid.NewString()
+	}
 	return base64.RawStdEncoding.EncodeToString(b)
 }
 
 // randomSS2022Pass returns a method-sized key for 2022-blake3-aes-128-gcm.
 func randomSS2022Pass() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := cryptoRandRead(b); err != nil {
+		return base64.StdEncoding.EncodeToString([]byte(uuid.NewString()[:16]))
+	}
 	return base64.StdEncoding.EncodeToString(b)
 }
 
@@ -236,6 +244,10 @@ func LoadNodesFromFile(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return nil, nil
+	}
+	lines := strings.Split(content, "\n")
 	return lines, nil
 }

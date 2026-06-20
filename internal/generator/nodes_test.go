@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,5 +93,23 @@ func TestGenerateSelectedFiltersProtocols(t *testing.T) {
 	}
 	if nodes[0].Protocol != "vless-reality" || nodes[1].Protocol != "ss2022" {
 		t.Fatalf("unexpected protocols: %#v", nodes)
+	}
+}
+
+func TestRandomHelpersFallbackWhenCryptoRandFails(t *testing.T) {
+	originalRead := cryptoRandRead
+	cryptoRandRead = func([]byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+	t.Cleanup(func() { cryptoRandRead = originalRead })
+
+	if got := randomShortID(); len(got) != 8 {
+		t.Fatalf("expected 8 character fallback short id, got %q", got)
+	}
+	if got := randomPass(); got == "" {
+		t.Fatal("expected fallback password")
+	}
+	if got := randomSS2022Pass(); got == "" {
+		t.Fatal("expected fallback ss2022 password")
 	}
 }

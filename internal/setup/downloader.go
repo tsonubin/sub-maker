@@ -16,8 +16,11 @@ import (
 	"github.com/tsonubin/sub-maker/internal/config"
 )
 
+var downloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var maxDownloadBytes int64 = 256 << 20
+
 func downloadFile(url, dest string) error {
-	resp, err := http.Get(url)
+	resp, err := downloadHTTPClient.Get(url)
 	if err != nil {
 		return err
 	}
@@ -25,13 +28,35 @@ func downloadFile(url, dest string) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
-	out, err := os.Create(dest)
+
+	tmpDest := dest + ".tmp"
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpDest)
+		}
+	}()
+
+	out, err := os.Create(tmpDest)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
-	return err
+	written, err := io.Copy(out, io.LimitReader(resp.Body, maxDownloadBytes+1))
+	closeErr := out.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if written > maxDownloadBytes {
+		return fmt.Errorf("download exceeds max size of %d bytes", maxDownloadBytes)
+	}
+	if err := os.Rename(tmpDest, dest); err != nil {
+		return err
+	}
+	cleanupTmp = false
+	return nil
 }
 
 func extractTarGz(src, dest string) error {
@@ -75,10 +100,14 @@ func extractTarGz(src, dest string) error {
 				out.Close()
 				return err
 			}
-			out.Close()
+			if err := out.Close(); err != nil {
+				return err
+			}
 			// make executable if looks like bin
 			if strings.Contains(target, "sing-box") || strings.Contains(target, "subconverter") {
-				os.Chmod(target, 0755)
+				if err := os.Chmod(target, 0755); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -105,26 +134,37 @@ func DownloadSingBox(version string) error {
 		return fmt.Errorf("download sing-box: %w", err)
 	}
 	extractDir := "/tmp/sing-box-extract"
-	os.RemoveAll(extractDir)
-	os.MkdirAll(extractDir, 0755)
+	if err := os.RemoveAll(extractDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(extractDir, 0755); err != nil {
+		return err
+	}
 	if err := extractTarGz(tmp, extractDir); err != nil {
 		return err
 	}
 	// find the binary inside (usually sing-box-{ver}-linux-{arch}/sing-box )
 	bin := ""
-	filepath.Walk(extractDir, func(p string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.HasSuffix(p, "sing-box") {
+	if err := filepath.Walk(extractDir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(p, "sing-box") {
 			bin = p
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
 	if bin == "" {
 		return fmt.Errorf("sing-box binary not found in archive")
 	}
 	installPath := "/usr/local/bin/sing-box"
 	if config.DemoMode() {
 		installDir := filepath.Join(homeDir(), ".local/bin")
-		os.MkdirAll(installDir, 0755)
+		if err := os.MkdirAll(installDir, 0755); err != nil {
+			return err
+		}
 		installPath = filepath.Join(installDir, "sing-box")
 	}
 	return os.Rename(bin, installPath)
@@ -171,8 +211,12 @@ func DownloadSubconverter(version string) error {
 		return fmt.Errorf("download subconverter: %w", err)
 	}
 	dest := subconverterDir()
-	os.RemoveAll(dest)
-	os.MkdirAll(dest, 0755)
+	if err := os.RemoveAll(dest); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return err
+	}
 	return extractTarGz(tmp, dest)
 }
 

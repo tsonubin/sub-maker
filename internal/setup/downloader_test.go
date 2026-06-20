@@ -3,10 +3,51 @@ package setup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestDownloadFileWritesResponseBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("archive"))
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "download.tar.gz")
+	if err := downloadFile(server.URL, dest); err != nil {
+		t.Fatalf("downloadFile returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read downloaded file: %v", err)
+	}
+	if string(data) != "archive" {
+		t.Fatalf("unexpected downloaded content: %q", string(data))
+	}
+}
+
+func TestDownloadFileRejectsOversizedResponse(t *testing.T) {
+	originalLimit := maxDownloadBytes
+	maxDownloadBytes = 4
+	t.Cleanup(func() { maxDownloadBytes = originalLimit })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("too-large"))
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "download.tar.gz")
+	if err := downloadFile(server.URL, dest); err == nil {
+		t.Fatal("expected oversized download error")
+	}
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("oversized response should not be promoted to destination file")
+	}
+}
 
 func TestExtractTarGzRejectsPathTraversal(t *testing.T) {
 	archive := createTarGz(t, []tarEntry{
