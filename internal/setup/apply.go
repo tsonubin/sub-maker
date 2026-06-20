@@ -2,6 +2,8 @@ package setup
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -15,6 +17,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tsonubin/sub-maker/internal/assets"
 	"github.com/tsonubin/sub-maker/internal/config"
 	"github.com/tsonubin/sub-maker/internal/diagnostics"
@@ -233,24 +236,72 @@ func ensureRuntimeCredentials(cfg *config.SetupConfig) error {
 	if cfg.Creds == nil {
 		cfg.Creds = make(map[string]map[string]string)
 	}
-	if !protocolEnabled(cfg.EnabledProtocols, "reality") {
-		return nil
+	for _, proto := range cfg.EnabledProtocols {
+		creds := cfg.Creds[proto]
+		if creds == nil {
+			creds = map[string]string{}
+			cfg.Creds[proto] = creds
+		}
+		switch proto {
+		case "reality":
+			if creds["uuid"] == "" {
+				creds["uuid"] = uuid.NewString()
+			}
+			if creds["short_id"] == "" {
+				creds["short_id"] = randomHex(4)
+			}
+			if creds["private_key"] == "" || creds["pbk"] == "" {
+				privateKey, publicKey, err := generateRealityKeypair()
+				if err != nil {
+					return err
+				}
+				creds["private_key"] = privateKey
+				creds["pbk"] = publicKey
+			}
+		case "hysteria2", "tuic", "anytls":
+			if creds["pass"] == "" {
+				creds["pass"] = randomSecret()
+			}
+			if proto == "tuic" && creds["uuid"] == "" {
+				creds["uuid"] = uuid.NewString()
+			}
+		case "ss2022":
+			if creds["pass"] == "" {
+				creds["pass"] = randomSS2022Secret()
+			}
+		}
 	}
-	creds := cfg.Creds["reality"]
-	if creds == nil {
-		creds = map[string]string{}
-		cfg.Creds["reality"] = creds
-	}
-	if creds["private_key"] != "" && creds["pbk"] != "" {
-		return nil
-	}
-	privateKey, publicKey, err := generateRealityKeypair()
-	if err != nil {
-		return err
-	}
-	creds["private_key"] = privateKey
-	creds["pbk"] = publicKey
 	return nil
+}
+
+func randomSecret() string {
+	b := make([]byte, 18)
+	if _, err := rand.Read(b); err != nil {
+		return uuid.NewString()
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func randomSS2022Secret() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return randomSecret()
+	}
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func randomHex(size int) string {
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		return strings.ReplaceAll(uuid.NewString(), "-", "")[:size*2]
+	}
+	const digits = "0123456789abcdef"
+	out := make([]byte, size*2)
+	for i, value := range b {
+		out[i*2] = digits[value>>4]
+		out[i*2+1] = digits[value&0x0f]
+	}
+	return string(out)
 }
 
 func generateRealityKeypair() (string, string, error) {
@@ -289,15 +340,6 @@ func extractKeyLine(output, pattern string) string {
 		return ""
 	}
 	return matches[1]
-}
-
-func protocolEnabled(protocols []string, protocol string) bool {
-	for _, value := range protocols {
-		if value == protocol {
-			return true
-		}
-	}
-	return false
 }
 
 func startAndVerifyServices(cfg *config.SetupConfig) error {
@@ -423,7 +465,7 @@ func inboundTemplateData(proto string, cfg *config.SetupConfig) (string, map[str
 func renderSingBoxConfig(cfg *config.SetupConfig, etcSB string) error {
 	baseTpl, err := readTemplate("templates/singbox_base.json.tpl")
 	if err != nil {
-		baseTpl = []byte(`{"log":{"level":"info"},"dns":{"servers":[{"address":"https://1.1.1.1/dns-query"}]},"inbounds":[{{.Inbounds}}],"outbounds":[{"type":"direct"}]}`)
+		baseTpl = []byte(`{"log":{"level":"info"},"dns":{"strategy":"ipv4_only","servers":[{"type":"https","server":"1.1.1.1"}]},"inbounds":[{{range $i, $in := .Inbounds}}{{if $i}},{{end}}{{$in}}{{end}}],"outbounds":[{"type":"direct"}]}`)
 	}
 
 	var inboundStrs []string
@@ -449,7 +491,7 @@ func renderSingBoxConfig(cfg *config.SetupConfig, etcSB string) error {
 		return fmt.Errorf("parse sing-box base template: %w", err)
 	}
 	var out bytes.Buffer
-	if err := t.Execute(&out, map[string]string{"Inbounds": strings.Join(inboundStrs, ",")}); err != nil {
+	if err := t.Execute(&out, map[string][]string{"Inbounds": inboundStrs}); err != nil {
 		return fmt.Errorf("execute sing-box base template: %w", err)
 	}
 

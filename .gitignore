@@ -19,8 +19,8 @@ go.work
 go.work.sum
 
 # Built binary - do not commit the executable
-sub-maker
-sub-maker-*
+/sub-maker
+/sub-maker-*
 
 # IDE and editor files
 .idea/

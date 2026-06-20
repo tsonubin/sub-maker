@@ -22,8 +22,5 @@
       "private_key": "{{ .PrivateKey }}",
       "short_id": ["{{ .ShortID }}"]
     }
-  },
-  "transport": {
-    "type": "tcp"
   }
 }

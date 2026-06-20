@@ -4,10 +4,11 @@
     "timestamp": true
   },
   "dns": {
+    "strategy": "ipv4_only",
     "servers": [
       {
-        "address": "https://1.1.1.1/dns-query",
-        "strategy": "ipv4_only"
+        "type": "https",
+        "server": "1.1.1.1"
       }
     ]
   },

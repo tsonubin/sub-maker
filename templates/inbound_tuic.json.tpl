@@ -16,9 +16,5 @@
     "key_path": "{{ .KeyPath }}"
   },
   "congestion_control": "bbr",
-  "auth_timeout": "3s",
-  "udp_relay": {
-    "enabled": true,
-    "timeout": "60s"
-  }
+  "auth_timeout": "3s"
 }

@@ -16,7 +16,7 @@ import (
 	"github.com/tsonubin/sub-maker/internal/config"
 )
 
-var downloadHTTPClient = &http.Client{Timeout: 30 * time.Second}
+var downloadHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 var maxDownloadBytes int64 = 256 << 20
 
 func downloadFile(url, dest string) error {
