@@ -97,7 +97,7 @@ func RunConfigWizard(existing *config.SetupConfig) (*config.SetupConfig, error) 
 
 	if cfg.SetupMode == config.SetupModeProduction && cfg.Domain != "" {
 		expectedDNSAddress := cfg.ServerAddr
-		if ipv4, ipv6 := splitExpectedIPs(expectedDNSAddress); ipv4 == "" && ipv6 == "" && detectedPublicIP != "" {
+		if ipv4, ipv6 := diagnostics.SplitExpectedIPs(expectedDNSAddress); ipv4 == "" && ipv6 == "" && detectedPublicIP != "" {
 			expectedDNSAddress = detectedPublicIP
 		}
 		if err := verifyDomainDNS(cfg, expectedDNSAddress); err != nil {
@@ -128,7 +128,6 @@ func RunConfigWizard(existing *config.SetupConfig) (*config.SetupConfig, error) 
 }
 
 func collectProtocolSelection(current []string) ([]string, error) {
-	protocols := []string{"reality", "hysteria2", "tuic", "anytls", "ss2022"}
 	protocolLabels := map[string]string{
 		"reality":   "VLESS + Reality-Vision",
 		"hysteria2": "Hysteria2",
@@ -153,7 +152,7 @@ func collectProtocolSelection(current []string) ([]string, error) {
 		return nil, err
 	}
 	if len(selected) == 0 {
-		selected = protocols
+		selected = append([]string(nil), config.AllProtocols...)
 	}
 	return selected, nil
 }
@@ -161,7 +160,7 @@ func collectProtocolSelection(current []string) ([]string, error) {
 func collectProtocolDetails(cfg *config.SetupConfig, selected []string, preserveSecrets bool) error {
 	for _, p := range selected {
 		port := cfg.Ports[p]
-		remark := strings.Title(p)
+		remark := capitalizeFirst(p)
 		extra := cloneStringMap(cfg.Creds[p])
 		if extra["remark"] != "" {
 			remark = extra["remark"]
@@ -189,7 +188,7 @@ func collectProtocolDetails(cfg *config.SetupConfig, selected []string, preserve
 				Description(secretDescription(extra["pass"], preserveSecrets)).
 				Value(&pPass).
 				EchoMode(huh.EchoModePassword),
-			huh.NewInput().Title(fmt.Sprintf("[%s] UUID", remark)).Description("Blank auto-generates when required.").Value(&pUUID),
+			huh.NewInput().Title(fmt.Sprintf("[%s] UUID", remark)).Description(uuidDescription(extra["uuid"], preserveSecrets)).Value(&pUUID),
 		))
 		if err := form.Run(); err != nil {
 			return err
@@ -220,7 +219,11 @@ func collectProtocolDetails(cfg *config.SetupConfig, selected []string, preserve
 		}
 		if p == "reality" || p == "tuic" {
 			if pUUID == "" {
-				pUUID = uuid.New().String()
+				if preserveSecrets && extra["uuid"] != "" {
+					pUUID = extra["uuid"]
+				} else {
+					pUUID = uuid.New().String()
+				}
 			}
 			extra["uuid"] = pUUID
 		}
@@ -261,6 +264,13 @@ func secretDescription(current string, preserve bool) string {
 		return "Blank keeps the current secret."
 	}
 	return "Blank auto-generates a new secret."
+}
+
+func uuidDescription(current string, preserve bool) string {
+	if preserve && current != "" {
+		return "Blank keeps the current UUID."
+	}
+	return "Blank auto-generates when required."
 }
 
 func protocolSelected(protocols []string, protocol string) bool {
@@ -317,6 +327,13 @@ func cloneConfig(in *config.SetupConfig) *config.SetupConfig {
 		out.Creds[key] = cloneStringMap(value)
 	}
 	return &out
+}
+
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

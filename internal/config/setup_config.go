@@ -6,8 +6,34 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"os"
 	"time"
 )
+
+var AllProtocols = []string{"reality", "hysteria2", "tuic", "anytls", "ss2022"}
+
+var DefaultPorts = map[string]int{
+	"reality":   443,
+	"hysteria2": 8443,
+	"tuic":      9443,
+	"anytls":    7443,
+	"ss2022":    8388,
+}
+
+func DemoMode() bool {
+	return os.Getenv("SUB_MAKER_DEMO") != ""
+}
+
+func DemoBase() string {
+	return "/tmp/sub-maker-demo-etc"
+}
+
+func EtcBase() string {
+	if DemoMode() {
+		return DemoBase()
+	}
+	return "/etc"
+}
 
 type SetupMode string
 
@@ -65,19 +91,17 @@ type SetupConfig struct {
 }
 
 func DefaultConfig() *SetupConfig {
+	ports := make(map[string]int, len(DefaultPorts))
+	for k, v := range DefaultPorts {
+		ports[k] = v
+	}
 	return &SetupConfig{
 		SubPort:          8964,
-		EnabledProtocols: []string{"reality", "hysteria2", "tuic", "anytls", "ss2022"},
-		Ports: map[string]int{
-			"reality":   443,
-			"hysteria2": 8443,
-			"tuic":      9443,
-			"anytls":    7443,
-			"ss2022":    8388,
-		},
-		Creds:     make(map[string]map[string]string),
-		CertMode:  CertStrategyCertbotHTTP,
-		SetupMode: SetupModeProduction,
+		EnabledProtocols: append([]string(nil), AllProtocols...),
+		Ports:            ports,
+		Creds:            make(map[string]map[string]string),
+		CertMode:         CertStrategyCertbotHTTP,
+		SetupMode:        SetupModeProduction,
 	}
 }
 

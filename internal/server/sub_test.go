@@ -3,6 +3,8 @@ package server
 import (
 	"strings"
 	"testing"
+
+	"github.com/tsonubin/sub-maker/internal/config"
 )
 
 func TestNodesToClashProxiesUsesProtocolAccurateFields(t *testing.T) {
@@ -41,5 +43,31 @@ func TestNodesToClashProxiesUsesProtocolAccurateFields(t *testing.T) {
 	}
 	if strings.Contains(yaml, "type: trojan") {
 		t.Fatalf("AnyTLS must not be mapped to Trojan:\n%s", yaml)
+	}
+}
+
+func TestLoadNodesReturnsNilWithoutDemoMode(t *testing.T) {
+	t.Setenv("SUB_MAKER_DEMO", "")
+	if nodes := loadNodes("/path/that/does/not/exist/nodes.txt"); nodes != nil {
+		t.Fatalf("expected nil nodes outside demo mode, got %#v", nodes)
+	}
+}
+
+func TestLoadNodesFallsBackInDemoMode(t *testing.T) {
+	t.Setenv("SUB_MAKER_DEMO", "1")
+	nodes := loadNodes("/path/that/does/not/exist/nodes.txt")
+	if len(nodes) == 0 {
+		t.Fatal("expected demo nodes in demo mode")
+	}
+}
+
+func TestDemoMode(t *testing.T) {
+	t.Setenv("SUB_MAKER_DEMO", "1")
+	if !config.DemoMode() {
+		t.Fatal("expected demo mode enabled")
+	}
+	t.Setenv("SUB_MAKER_DEMO", "")
+	if config.DemoMode() {
+		t.Fatal("expected demo mode disabled")
 	}
 }

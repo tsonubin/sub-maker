@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -21,15 +20,42 @@ import (
 func RunWizard() (*config.SetupConfig, error) {
 	cfg := config.DefaultConfig()
 
+	detectedPublicIP, err := collectSetupMode(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := collectAddressInfo(cfg, detectedPublicIP); err != nil {
+		return nil, err
+	}
+
+	selected, err := collectWizardProtocols()
+	if err != nil {
+		return nil, err
+	}
+	cfg.EnabledProtocols = selected
+
+	if diagnostics.ProtocolsRequireLocalCert(selected) {
+		if err := collectCertStrategy(cfg); err != nil {
+			return nil, err
+		}
+	} else {
+		cfg.CertMode = config.CertStrategySelfSigned
+	}
+
+	if err := collectNewProtocolDetails(cfg, selected); err != nil {
+		return nil, err
+	}
+
+	slog.Info("TUI collection complete", "enabled", cfg.EnabledProtocols, "port", cfg.SubPort)
+	return cfg, nil
+}
+
+func collectSetupMode(cfg *config.SetupConfig) (string, error) {
 	var setupMode string = string(config.SetupModeProduction)
 	detectedPublicIP := ""
-	serverAddrPlaceholder := "1.2.3.4 or your.domain.com"
-	serverAddrDescription := "Used in generated client links and the subscription URL."
 	if detectedIP, err := diagnostics.DetectPublicIP(context.Background()); err == nil {
 		detectedPublicIP = detectedIP
 		cfg.ServerAddr = detectedIP
-		serverAddrPlaceholder = detectedIP
-		serverAddrDescription = "Detected: " + detectedIP + ". You can replace it with a domain."
 		slog.Info("detected server public IP", "ip", detectedIP)
 	} else {
 		slog.Info("could not auto-detect server public IP", "err", err)
@@ -50,9 +76,19 @@ func RunWizard() (*config.SetupConfig, error) {
 		),
 	)
 	if err := intro.Run(); err != nil {
-		return nil, err
+		return "", err
 	}
 	cfg.SetupMode = config.SetupMode(setupMode)
+	return detectedPublicIP, nil
+}
+
+func collectAddressInfo(cfg *config.SetupConfig, detectedPublicIP string) error {
+	serverAddrPlaceholder := "1.2.3.4 or your.domain.com"
+	serverAddrDescription := "Used in generated client links and the subscription URL."
+	if detectedPublicIP != "" {
+		serverAddrPlaceholder = detectedPublicIP
+		serverAddrDescription = "Detected: " + detectedPublicIP + ". You can replace it with a domain."
+	}
 
 	var domain, email, token, subPortStr, linkPasscode string
 	serverAddr := cfg.ServerAddr
@@ -81,7 +117,7 @@ func RunWizard() (*config.SetupConfig, error) {
 		),
 	)
 	if err := addressForm.Run(); err != nil {
-		return nil, err
+		return err
 	}
 
 	cfg.ServerAddr = serverAddr
@@ -98,7 +134,7 @@ func RunWizard() (*config.SetupConfig, error) {
 		linkPasscode = config.GenerateLinkPasscode()
 	}
 	if err := cfg.SetLinkPasscode(linkPasscode); err != nil {
-		return nil, err
+		return err
 	}
 	if subPortStr != "" {
 		fmt.Sscanf(subPortStr, "%d", &cfg.SubPort)
@@ -109,17 +145,17 @@ func RunWizard() (*config.SetupConfig, error) {
 
 	if cfg.SetupMode == config.SetupModeProduction && cfg.Domain != "" {
 		expectedDNSAddress := cfg.ServerAddr
-		if ipv4, ipv6 := splitExpectedIPs(expectedDNSAddress); ipv4 == "" && ipv6 == "" && detectedPublicIP != "" {
+		if ipv4, ipv6 := diagnostics.SplitExpectedIPs(expectedDNSAddress); ipv4 == "" && ipv6 == "" && detectedPublicIP != "" {
 			expectedDNSAddress = detectedPublicIP
 		}
 		if err := verifyDomainDNS(cfg, expectedDNSAddress); err != nil {
-			return nil, err
+			return err
 		}
 	}
+	return nil
+}
 
-	// 2. Protocol selection (multi)
-	var selected []string
-	protocols := []string{"reality", "hysteria2", "tuic", "anytls", "ss2022"}
+func collectWizardProtocols() ([]string, error) {
 	protocolLabels := map[string]string{
 		"reality":   "VLESS + Reality-Vision (stealth king)",
 		"hysteria2": "Hysteria2 (speed on lossy links)",
@@ -127,8 +163,8 @@ func RunWizard() (*config.SetupConfig, error) {
 		"anytls":    "AnyTLS (modern padding TLS camo)",
 		"ss2022":    "Shadowsocks 2022 (simple & fast)",
 	}
-
-	form2 := huh.NewForm(
+	var selected []string
+	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewMultiSelect[string]().
 				Title("Select protocols to enable (top-5 recommended)").
@@ -142,26 +178,19 @@ func RunWizard() (*config.SetupConfig, error) {
 				Value(&selected),
 		),
 	)
-	if err := form2.Run(); err != nil {
+	if err := form.Run(); err != nil {
 		return nil, err
 	}
 	if len(selected) == 0 {
-		selected = protocols
+		selected = append([]string(nil), config.AllProtocols...)
 	}
-	cfg.EnabledProtocols = selected
+	return selected, nil
+}
 
-	if diagnostics.ProtocolsRequireLocalCert(selected) {
-		if err := collectCertStrategy(cfg); err != nil {
-			return nil, err
-		}
-	} else {
-		cfg.CertMode = config.CertStrategySelfSigned
-	}
-
-	// 3. Per-protocol details (ports, creds, remarks) - sequential for simplicity.
+func collectNewProtocolDetails(cfg *config.SetupConfig, selected []string) error {
 	for _, p := range selected {
 		port := cfg.Ports[p]
-		remark := strings.Title(p)
+		remark := capitalizeFirst(p)
 		extra := map[string]string{}
 
 		portStr := fmt.Sprintf("%d", port)
@@ -182,7 +211,7 @@ func RunWizard() (*config.SetupConfig, error) {
 			),
 		)
 		if err := formP.Run(); err != nil {
-			return nil, err
+			return err
 		}
 
 		var pPort int
@@ -212,29 +241,31 @@ func RunWizard() (*config.SetupConfig, error) {
 			}
 			extra["uuid"] = pUUID
 		}
-
-		// Reality extras (pbk/short will be filled after cert/key or user provided)
 		if p == "reality" {
-			var pbk, sid string
-			formR := huh.NewForm(huh.NewGroup(
-				huh.NewInput().Title("Reality public key (auto-generated during setup if empty)").Value(&pbk),
-				huh.NewInput().Title("Reality shortId (8 hex; auto if empty)").Value(&sid),
-			))
-			_ = formR.Run() // ignore cancel
-			if pbk != "" {
-				extra["pbk"] = pbk
+			if err := collectRealityExtras(extra); err != nil {
+				return err
 			}
-			if sid == "" {
-				sid = randomHex(4)
-			}
-			extra["short_id"] = sid
 		}
-
 		cfg.Creds[p] = extra
 	}
+	return nil
+}
 
-	slog.Info("TUI collection complete", "enabled", cfg.EnabledProtocols, "port", cfg.SubPort)
-	return cfg, nil
+func collectRealityExtras(extra map[string]string) error {
+	var pbk, sid string
+	formR := huh.NewForm(huh.NewGroup(
+		huh.NewInput().Title("Reality public key (auto-generated during setup if empty)").Value(&pbk),
+		huh.NewInput().Title("Reality shortId (8 hex; auto if empty)").Value(&sid),
+	))
+	_ = formR.Run()
+	if pbk != "" {
+		extra["pbk"] = pbk
+	}
+	if sid == "" {
+		sid = randomHex(4)
+	}
+	extra["short_id"] = sid
+	return nil
 }
 
 func randomToken() string {
@@ -272,7 +303,7 @@ func randomHex(size int) string {
 }
 
 func verifyDomainDNS(cfg *config.SetupConfig, expectedAddress string) error {
-	expectedIPv4, expectedIPv6 := splitExpectedIPs(expectedAddress)
+	expectedIPv4, expectedIPv6 := diagnostics.SplitExpectedIPs(expectedAddress)
 	result, err := diagnostics.CheckDomainDNS(context.Background(), cfg.Domain, expectedIPv4, expectedIPv6)
 	cfg.DNSCheck = result
 	if err == nil && diagnostics.DNSMatches(result) {
@@ -346,17 +377,6 @@ func collectCertStrategy(cfg *config.SetupConfig) error {
 		return diagnostics.ValidateCertificatePair(cfg.CertPath, cfg.KeyPath, cfg.Domain)
 	}
 	return nil
-}
-
-func splitExpectedIPs(value string) (string, string) {
-	addr, err := netip.ParseAddr(value)
-	if err != nil {
-		return "", ""
-	}
-	if addr.Is4() {
-		return addr.String(), ""
-	}
-	return "", addr.String()
 }
 
 func dnsMismatchMessage(domain, expectedIPv4, expectedIPv6 string, result *config.DNSCheckResult, lookupErr error) string {

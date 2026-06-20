@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tsonubin/sub-maker/internal/config"
 )
 
 func Run() error {
@@ -25,10 +28,7 @@ func Run() error {
 
 	nodesPath := os.Getenv("SUB_MAKER_NODES_FILE")
 	if nodesPath == "" {
-		nodesPath = "/etc/sub-maker/nodes.txt"
-		if os.Getenv("SUB_MAKER_DEMO") != "" {
-			nodesPath = "/tmp/sub-maker-demo-etc/sub-maker/nodes.txt"
-		}
+		nodesPath = filepath.Join(config.EtcBase(), "sub-maker", "nodes.txt")
 	}
 
 	mux := http.NewServeMux()
@@ -45,12 +45,13 @@ func Run() error {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
-		data, _ := os.ReadFile(nodesPath)
-		if len(data) == 0 {
-			data = []byte("# no nodes.txt found\n")
+		nodes := loadNodes(nodesPath)
+		if len(nodes) == 0 {
+			http.Error(w, "no nodes configured", http.StatusServiceUnavailable)
+			return
 		}
-		w.Write(data)
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintln(w, strings.Join(nodes, "\n"))
 	})
 
 	mux.HandleFunc("/sub", func(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +61,10 @@ func Run() error {
 		}
 
 		nodes := loadNodes(nodesPath)
+		if len(nodes) == 0 {
+			http.Error(w, "no nodes configured", http.StatusServiceUnavailable)
+			return
+		}
 		proxiesYAML, proxyNames := nodesToClashProxiesWithNames(nodes)
 
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
@@ -126,11 +131,10 @@ rules:
 func loadNodes(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
-		// fallback demo nodes
-		return []string{
-			"hysteria2://demo-pass@127.0.0.1:8443/?sni=example.com#Hy2",
-			"vless://demo-uuid@127.0.0.1:443?security=reality&fp=chrome&sni=www.apple.com&sid=0123abc&pbk=demo-pbk#Reality",
+		if config.DemoMode() {
+			return demoNodes()
 		}
+		return nil
 	}
 	defer f.Close()
 
@@ -142,13 +146,18 @@ func loadNodes(path string) []string {
 			out = append(out, line)
 		}
 	}
-	if len(out) == 0 {
-		out = []string{
-			"hysteria2://demo-pass@127.0.0.1:8443/?sni=example.com#Hy2",
-			"vless://demo-uuid@127.0.0.1:443?security=reality&fp=chrome&sni=www.apple.com&sid=0123abc&pbk=demo-pbk#Reality",
-		}
+	if len(out) == 0 && config.DemoMode() {
+		return demoNodes()
 	}
 	return out
+}
+
+
+func demoNodes() []string {
+	return []string{
+		"hysteria2://demo-pass@127.0.0.1:8443/?sni=example.com#Hy2",
+		"vless://demo-uuid@127.0.0.1:443?security=reality&fp=chrome&sni=www.apple.com&sid=0123abc&pbk=demo-pbk#Reality",
+	}
 }
 
 func nodesToClashProxiesWithNames(nodes []string) (string, []string) {
@@ -222,10 +231,4 @@ func decodeSSUserInfo(encoded string) (string, string) {
 		}
 	}
 	return "2022-blake3-aes-128-gcm", encoded
-}
-
-// keep old name for compatibility if any other code calls it
-func nodesToClashProxies(nodes []string) string {
-	y, _ := nodesToClashProxiesWithNames(nodes)
-	return y
 }

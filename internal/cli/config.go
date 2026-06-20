@@ -9,19 +9,11 @@ import (
 )
 
 func ConfigPath() string {
-	base := "/etc"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		base = "/tmp/sub-maker-demo-etc"
-	}
-	return filepath.Join(base, "sub-maker", "config.yaml")
+	return filepath.Join(config.EtcBase(), "sub-maker", "config.yaml")
 }
 
 func NodesPath() string {
-	base := "/etc"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		base = "/tmp/sub-maker-demo-etc"
-	}
-	return filepath.Join(base, "sub-maker", "nodes.txt")
+	return filepath.Join(config.EtcBase(), "sub-maker", "nodes.txt")
 }
 
 func LoadConfig() (*config.SetupConfig, error) {

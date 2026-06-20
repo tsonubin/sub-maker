@@ -69,6 +69,17 @@ func DNSMatches(result *config.DNSCheckResult) bool {
 	return result.IPv4Matches && result.IPv6Matches
 }
 
+func SplitExpectedIPs(value string) (string, string) {
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		return "", ""
+	}
+	if addr.Is4() {
+		return addr.String(), ""
+	}
+	return "", addr.String()
+}
+
 func containsIP(values []string, expected string) bool {
 	if expected == "" {
 		return true

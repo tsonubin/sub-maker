@@ -130,7 +130,7 @@ See `.github/workflows/release.yml` for details.
 | `status` | Show systemd status for sing-box and sub-maker-sub | `sudo sub-maker status` |
 | `restart` | Restart sing-box and sub-maker-sub | `sudo sub-maker restart` |
 | `start` / `stop` | Start or stop managed services | `sudo sub-maker start` |
-| `--update` | (Planned) Update sing-box and subconverter binaries | `sub-maker --update` |
+| `--update` | Update sing-box and subconverter binaries | `sudo sub-maker --update` |
 | `--version` | Print version | `sub-maker --version` |
 
 Environment variables (useful for scripting / containers):
@@ -185,7 +185,7 @@ Example: `http://your-server:8964/raw?token=YOUR-TOKEN`
 ### Updating
 
 - Re-run `./sub-maker --setup` (it will re-download binaries if you use `--update` once implemented, or you can manually upgrade).
-- For sing-box / subconverter updates: the `--update` flag is planned; until then, you can replace the binaries in `/usr/local/bin` and `/opt/subconverter` and restart the units.
+- For sing-box / subconverter updates: run `sudo sub-maker --update`, then `sudo sub-maker restart`.
 
 ## Architecture Overview
 

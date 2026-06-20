@@ -1,6 +1,10 @@
 package setup
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tsonubin/sub-maker/internal/config"
+)
 
 func TestParseRealityKeypairOutputAcceptsSingBoxLabels(t *testing.T) {
 	output := "PrivateKey: kLdPxlfZRBqpLh0Pf4C3JvVNvtHdCMCGnAjx2vA3KXU\nPublicKey: ghEQYzsLid4rCIyA694d399DIkYPuohND5NoqILIzSs\n"
@@ -26,5 +30,30 @@ func TestParseRealityKeypairOutputAcceptsSeparatedLabels(t *testing.T) {
 	}
 	if privateKey != "private_value" || publicKey != "public_value" {
 		t.Fatalf("unexpected keys: private=%s public=%s", privateKey, publicKey)
+	}
+}
+
+func TestProtocolServerNameUsesRealityCamouflageSNI(t *testing.T) {
+	cfg := &config.SetupConfig{Domain: "proxy.example.com"}
+	creds := map[string]string{"sni": "www.apple.com"}
+
+	if got := protocolServerName("reality", cfg, creds); got != "www.apple.com" {
+		t.Fatalf("expected camouflage sni, got %q", got)
+	}
+}
+
+func TestProtocolServerNameDefaultsRealityWithoutOverride(t *testing.T) {
+	cfg := &config.SetupConfig{Domain: "proxy.example.com"}
+
+	if got := protocolServerName("reality", cfg, map[string]string{}); got != "www.apple.com" {
+		t.Fatalf("expected default reality sni, got %q", got)
+	}
+}
+
+func TestProtocolServerNameUsesDomainForTLSProtocols(t *testing.T) {
+	cfg := &config.SetupConfig{Domain: "proxy.example.com"}
+
+	if got := protocolServerName("hysteria2", cfg, map[string]string{}); got != "proxy.example.com" {
+		t.Fatalf("expected domain sni, got %q", got)
 	}
 }

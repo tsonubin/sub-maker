@@ -18,6 +18,11 @@ import (
 	"github.com/tsonubin/sub-maker/internal/config"
 )
 
+// certsDstDir returns the directory for managed certificate files.
+func certsDstDir() string {
+	return filepath.Join(config.EtcBase(), "sub-maker", "certs")
+}
+
 // EnsureAcme installs acme.sh if missing and issues cert for domain using the chosen mode.
 // This is called from TUI or Apply.
 func EnsureAcme(domain, email string, mode config.CertStrategy, cfToken string) error {
@@ -138,10 +143,7 @@ func CopyCertbotCertsToEtc(domain string) error {
 }
 
 func GenerateSelfSignedCert(domain, serverAddr string) error {
-	dst := "/etc/sub-maker/certs"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		dst = "/tmp/sub-maker-demo-etc/sub-maker/certs"
-	}
+	dst := certsDstDir()
 	if err := os.MkdirAll(dst, 0755); err != nil {
 		return err
 	}

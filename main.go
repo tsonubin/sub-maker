@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/tsonubin/sub-maker/internal/cli"
 	"github.com/tsonubin/sub-maker/internal/config"
@@ -69,7 +68,17 @@ func main() {
 		}
 		fmt.Print(string(data))
 	case *updateCmd || command == "update":
-		fmt.Println("Update logic not yet implemented (task 9).")
+		slog.Info("updating sing-box...")
+		if err := setup.DownloadSingBox(""); err != nil {
+			slog.Error("sing-box update failed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("updating subconverter...")
+		if err := setup.DownloadSubconverter(""); err != nil {
+			slog.Error("subconverter update failed", "err", err)
+			os.Exit(1)
+		}
+		fmt.Println("Binaries updated. Restart services with: sudo sub-maker restart")
 	case command == "links":
 		if err := cli.PrintLinks(); err != nil {
 			slog.Error("links failed", "err", err)
@@ -100,13 +109,11 @@ func main() {
 		// No subcommand provided — show usage (includes disclaimer)
 		flag.Usage()
 	}
-
-	_ = time.Now() // keep import if needed
 }
 
 func runSetup() {
 	var cfg *config.SetupConfig
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
+	if config.DemoMode() {
 		// Non-interactive demo path (for CI / this env without tty)
 		cfg = config.DefaultConfig()
 		cfg.ServerAddr = "demo.server.example"

@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/tsonubin/sub-maker/internal/config"
 )
 
 func downloadFile(url, dest string) error {
@@ -53,6 +55,9 @@ func extractTarGz(src, dest string) error {
 			return err
 		}
 		target := filepath.Join(dest, h.Name)
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dest)+string(os.PathSeparator)) && filepath.Clean(target) != filepath.Clean(dest) {
+			return fmt.Errorf("tar entry %q attempts path traversal", h.Name)
+		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0755); err != nil {
@@ -117,12 +122,8 @@ func DownloadSingBox(version string) error {
 		return fmt.Errorf("sing-box binary not found in archive")
 	}
 	installPath := "/usr/local/bin/sing-box"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		home := os.Getenv("HOME")
-		if home == "" {
-			home = "/tmp"
-		}
-		installDir := filepath.Join(home, ".local/bin")
+	if config.DemoMode() {
+		installDir := filepath.Join(homeDir(), ".local/bin")
 		os.MkdirAll(installDir, 0755)
 		installPath = filepath.Join(installDir, "sing-box")
 	}
@@ -156,27 +157,34 @@ func latestGitHubReleaseTag(repo, fallback string) string {
 	return payload.TagName
 }
 
-// DownloadSubconverter downloads the (tindy) subconverter and places in /opt/subconverter
-// Note: for full anytls/reality etc support in clash target, replace with asdlokj1qpi233 fork build if needed.
+// DownloadSubconverter downloads the asdlokj1qpi233 subconverter fork and places it in /opt/subconverter.
+// The fork ships multi-arch builds (linux64, aarch64, armv7, linux32).
 // In DEMO mode (SUB_MAKER_DEMO=1), installs to $HOME/.local/subconverter (no sudo needed).
 func DownloadSubconverter(version string) error {
 	if version == "" {
-		version = "v0.9.0"
+		version = latestGitHubReleaseTag("asdlokj1qpi233/subconverter", "v0.9.9")
 	}
-	url := fmt.Sprintf("https://github.com/tindy2013/subconverter/releases/download/%s/subconverter_linux64.tar.gz", version)
+	asset := subconverterAssetName()
+	url := fmt.Sprintf("https://github.com/asdlokj1qpi233/subconverter/releases/download/%s/%s", version, asset)
 	tmp := "/tmp/subconverter.tar.gz"
 	if err := downloadFile(url, tmp); err != nil {
 		return fmt.Errorf("download subconverter: %w", err)
 	}
-	dest := "/opt/subconverter"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		home := os.Getenv("HOME")
-		if home == "" {
-			home = "/tmp"
-		}
-		dest = filepath.Join(home, ".local/subconverter")
-	}
+	dest := subconverterDir()
 	os.RemoveAll(dest)
 	os.MkdirAll(dest, 0755)
 	return extractTarGz(tmp, dest)
+}
+
+func subconverterAssetName() string {
+	switch runtime.GOARCH {
+	case "arm64":
+		return "subconverter_aarch64.tar.gz"
+	case "arm":
+		return "subconverter_armv7.tar.gz"
+	case "386":
+		return "subconverter_linux32.tar.gz"
+	default:
+		return "subconverter_linux64.tar.gz"
+	}
 }

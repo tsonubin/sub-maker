@@ -24,31 +24,16 @@ import (
 
 // Apply performs the full "setup on current server".
 // Downloads sing-box + subconverter, renders real configs from templates using collected data,
-// writes nodes, systemd units, sub-maker config, and (stubs for now) cert/acme + firewall.
+// writes nodes, systemd units, sub-maker config, certificates, and prints firewall hints.
 func Apply(cfg *config.SetupConfig) error {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
 
-	// Real paths (or demo paths)
-	base := "/etc"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		base = "/tmp/sub-maker-demo-etc"
-	}
+	base := config.EtcBase()
 	etcSub := filepath.Join(base, "sub-maker")
 	etcSB := filepath.Join(base, "sing-box")
-
-	// subconverter install location (system or user-local in demo)
-	var optSC string
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		home := os.Getenv("HOME")
-		if home == "" {
-			home = "/tmp"
-		}
-		optSC = filepath.Join(home, ".local/subconverter")
-	} else {
-		optSC = "/opt/subconverter"
-	}
+	optSC := subconverterDir()
 
 	for _, d := range []string{etcSub, etcSB, optSC} {
 		if err := os.MkdirAll(d, 0755); err != nil {
@@ -115,13 +100,17 @@ func Apply(cfg *config.SetupConfig) error {
 		return err
 	}
 
-	if os.Getenv("SUB_MAKER_DEMO") == "" {
+	if !config.DemoMode() {
 		if err := startAndVerifyServices(cfg); err != nil {
 			return err
 		}
 	}
 
-	// 9. Firewall hint
+	printApplySummary(cfg, nodesPath, etcSB, optSC, cfgPath)
+	return nil
+}
+
+func printApplySummary(cfg *config.SetupConfig, nodesPath, etcSB, optSC, cfgPath string) {
 	slog.Info("firewall: ensure ports open", "sub", cfg.SubPort, "others", cfg.Ports)
 
 	links := diagnostics.BuildLinks(cfg)
@@ -148,8 +137,6 @@ func Apply(cfg *config.SetupConfig) error {
 	for _, rule := range firewallRules(cfg) {
 		fmt.Printf("  ufw allow %d/%s  # %s\n", rule.Port, rule.Transport, rule.Label)
 	}
-
-	return nil
 }
 
 type firewallRule struct {
@@ -188,12 +175,9 @@ func ensureCertificates(cfg *config.SetupConfig) error {
 		return diagnostics.ValidateCertificatePair(cfg.CertPath, cfg.KeyPath, cfg.Domain)
 	}
 
-	certPath := "/etc/sub-maker/certs/fullchain.pem"
-	keyPath := "/etc/sub-maker/certs/privkey.pem"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
-		certPath = "/tmp/sub-maker-demo-etc/sub-maker/certs/fullchain.pem"
-		keyPath = "/tmp/sub-maker-demo-etc/sub-maker/certs/privkey.pem"
-	}
+	certsDir := filepath.Join(config.EtcBase(), "sub-maker", "certs")
+	certPath := filepath.Join(certsDir, "fullchain.pem")
+	keyPath := filepath.Join(certsDir, "privkey.pem")
 	if cfg.CertPath == "" {
 		cfg.CertPath = certPath
 	}
@@ -206,7 +190,7 @@ func ensureCertificates(cfg *config.SetupConfig) error {
 
 	switch cfg.CertMode {
 	case config.CertStrategyCertbotHTTP:
-		if os.Getenv("SUB_MAKER_DEMO") == "" {
+		if !config.DemoMode() {
 			if err := EnsureCertbot(cfg.Domain, cfg.Email); err != nil {
 				return err
 			}
@@ -217,7 +201,7 @@ func ensureCertificates(cfg *config.SetupConfig) error {
 			return err
 		}
 	case config.CertStrategyACMEHTTP, config.CertStrategyACMEDNSCF:
-		if os.Getenv("SUB_MAKER_DEMO") == "" {
+		if !config.DemoMode() {
 			if err := EnsureAcme(cfg.Domain, cfg.Email, cfg.CertMode, cfg.ACMETokenCF); err != nil {
 				return err
 			}
@@ -268,7 +252,7 @@ func ensureRuntimeCredentials(cfg *config.SetupConfig) error {
 
 func generateRealityKeypair() (string, string, error) {
 	binary := "/usr/local/bin/sing-box"
-	if os.Getenv("SUB_MAKER_DEMO") != "" {
+	if config.DemoMode() {
 		if home := os.Getenv("HOME"); home != "" {
 			binary = filepath.Join(home, ".local/bin/sing-box")
 		}
@@ -317,11 +301,55 @@ func startAndVerifyServices(cfg *config.SetupConfig) error {
 	if err := diagnostics.RunSystemctl("daemon-reload"); err != nil {
 		return err
 	}
-	if err := diagnostics.RunSystemctl("enable", "--now", "sing-box", "sub-maker-sub"); err != nil {
+	services := []string{"sing-box", "sub-maker-sub"}
+	if SubconverterInstalled() {
+		services = append(services, "subconverter")
+	}
+	enableArgs := append([]string{"enable", "--now"}, services...)
+	if err := diagnostics.RunSystemctl(enableArgs...); err != nil {
 		return err
 	}
 	localURL := fmt.Sprintf("http://127.0.0.1:%d/sub?token=%s", cfg.SubPort, cfg.SubToken)
 	return diagnostics.VerifySubscriptionEndpoint(localURL)
+}
+
+func subconverterDir() string {
+	if config.DemoMode() {
+		return filepath.Join(homeDir(), ".local/subconverter")
+	}
+	return "/opt/subconverter"
+}
+
+func homeDir() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	return "/tmp"
+}
+
+// SubconverterInstalled reports whether the subconverter binary is present.
+func SubconverterInstalled() bool {
+	candidates := []string{"/opt/subconverter/subconverter"}
+	if config.DemoMode() {
+		candidates = append([]string{filepath.Join(homeDir(), ".local/subconverter/subconverter")}, candidates...)
+	}
+	for _, path := range candidates {
+		info, err := os.Stat(path)
+		if err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func protocolServerName(proto string, cfg *config.SetupConfig, creds map[string]string) string {
+	if sni := creds["sni"]; sni != "" {
+		return sni
+	}
+	if proto == "reality" {
+		return "www.apple.com"
+	}
+	return cfg.Domain
 }
 
 func readTemplate(name string) ([]byte, error) {
@@ -347,86 +375,81 @@ func readTemplate(name string) ([]byte, error) {
 	return nil, fmt.Errorf("template %s not found", name)
 }
 
+func inboundTemplateData(proto string, cfg *config.SetupConfig) (string, map[string]interface{}) {
+	creds := cfg.Creds[proto]
+	if creds == nil {
+		creds = map[string]string{}
+	}
+	data := map[string]interface{}{
+		"Port":       cfg.Ports[proto],
+		"ServerName": protocolServerName(proto, cfg, creds),
+	}
+	if cfg.CertPath != "" {
+		data["CertPath"] = cfg.CertPath
+		data["KeyPath"] = cfg.KeyPath
+	} else {
+		data["CertPath"] = "/etc/sub-maker/certs/fullchain.pem"
+		data["KeyPath"] = "/etc/sub-maker/certs/privkey.pem"
+	}
+
+	var tplName string
+	switch proto {
+	case "reality":
+		tplName = "inbound_reality.json.tpl"
+		data["UUID"] = creds["uuid"]
+		data["PrivateKey"] = creds["private_key"]
+		data["ShortID"] = creds["short_id"]
+	case "hysteria2":
+		tplName = "inbound_hysteria2.json.tpl"
+		data["Password"] = creds["pass"]
+	case "tuic":
+		tplName = "inbound_tuic.json.tpl"
+		data["UUID"] = creds["uuid"]
+		data["Password"] = creds["pass"]
+	case "anytls":
+		tplName = "inbound_anytls.json.tpl"
+		data["Password"] = creds["pass"]
+	case "ss2022":
+		tplName = "inbound_ss2022.json.tpl"
+		data["Password"] = creds["pass"]
+		data["Method"] = "2022-blake3-aes-128-gcm"
+	}
+	return tplName, data
+}
+
 func renderSingBoxConfig(cfg *config.SetupConfig, etcSB string) error {
-	// Load base template
 	baseTpl, err := readTemplate("templates/singbox_base.json.tpl")
 	if err != nil {
 		baseTpl = []byte(`{"log":{"level":"info"},"dns":{"servers":[{"address":"https://1.1.1.1/dns-query"}]},"inbounds":[{{.Inbounds}}],"outbounds":[{"type":"direct"}]}`)
 	}
 
-	// Build inbound JSON strings from per-protocol templates + data
 	var inboundStrs []string
 	for _, proto := range cfg.EnabledProtocols {
-		port := cfg.Ports[proto]
-		creds := cfg.Creds[proto]
-		if creds == nil {
-			creds = map[string]string{}
-		}
-		var tplName string
-		data := map[string]interface{}{
-			"Port":       port,
-			"ServerName": cfg.Domain,
-		}
-		// defaults for certs (overwritten by real in cert step or self-signed)
-		if cfg.CertPath != "" {
-			data["CertPath"] = cfg.CertPath
-			data["KeyPath"] = cfg.KeyPath
-		} else {
-			data["CertPath"] = "/etc/sub-maker/certs/fullchain.pem"
-			data["KeyPath"] = "/etc/sub-maker/certs/privkey.pem"
-		}
-		switch proto {
-		case "reality":
-			tplName = "inbound_reality.json.tpl"
-			data["UUID"] = creds["uuid"]
-			data["PrivateKey"] = creds["private_key"]
-			data["ShortID"] = creds["short_id"]
-		case "hysteria2":
-			tplName = "inbound_hysteria2.json.tpl"
-			data["Password"] = creds["pass"]
-		case "tuic":
-			tplName = "inbound_tuic.json.tpl"
-			data["UUID"] = creds["uuid"]
-			data["Password"] = creds["pass"]
-		case "anytls":
-			tplName = "inbound_anytls.json.tpl"
-			data["Password"] = creds["pass"]
-		case "ss2022":
-			tplName = "inbound_ss2022.json.tpl"
-			data["Password"] = creds["pass"]
-			data["Method"] = "2022-blake3-aes-128-gcm"
-		}
+		tplName, data := inboundTemplateData(proto, cfg)
 		tplContent, err := readTemplate("templates/" + tplName)
 		if err != nil {
-			// fallback simple inbound
-			tplContent = []byte(fmt.Sprintf(`{"type":"%s","listen":"::","listen_port":%d}`, proto, port))
+			tplContent = []byte(fmt.Sprintf(`{"type":"%s","listen":"::","listen_port":%d}`, proto, cfg.Ports[proto]))
 		}
 		t, _ := template.New(proto).Parse(string(tplContent))
 		var buf bytes.Buffer
 		t.Execute(&buf, data)
-		// pretty? no need, sing-box accepts
 		inboundStrs = append(inboundStrs, buf.String())
 	}
 
-	inboundsJSON := strings.Join(inboundStrs, ",")
-
 	t, _ := template.New("base").Parse(string(baseTpl))
 	var out bytes.Buffer
-	t.Execute(&out, map[string]string{"Inbounds": inboundsJSON})
+	t.Execute(&out, map[string]string{"Inbounds": strings.Join(inboundStrs, ",")})
 
-	// validate it's json-ish
 	var js map[string]interface{}
 	if err := json.Unmarshal(out.Bytes(), &js); err != nil {
 		slog.Warn("sing-box config may not be perfect json", "err", err)
 	}
-
 	return os.WriteFile(filepath.Join(etcSB, "config.json"), out.Bytes(), 0644)
 }
 
 func setupSubconverterFiles(etcSub, optSC string) error {
-	// copy pref
-	pref, _ := os.ReadFile("templates/subconverter_pref.ini.tpl")
-	if len(pref) == 0 {
+	pref, err := readTemplate("templates/subconverter_pref.ini.tpl")
+	if err != nil || len(pref) == 0 {
 		pref = []byte("api_access_token=submaker123\n")
 	}
 	os.WriteFile(filepath.Join(optSC, "pref.ini"), pref, 0644)
@@ -458,9 +481,8 @@ func writeSystemdUnits(cfg *config.SetupConfig, nodesPath string) error {
 			"Port":      strconv.Itoa(cfg.SubPort),
 			"NodesPath": nodesPath,
 		})
-		// for demo, write to /tmp if no perm
 		path := "/etc/systemd/system/" + name
-		if os.Getenv("SUB_MAKER_DEMO") != "" {
+		if config.DemoMode() {
 			path = filepath.Join("/tmp", name)
 		}
 		if err := os.WriteFile(path, buf.Bytes(), 0644); err != nil {

@@ -3,10 +3,10 @@ package cli
 import (
 	"context"
 	"fmt"
-	"net/netip"
 	"os"
 
 	"github.com/tsonubin/sub-maker/internal/diagnostics"
+	"github.com/tsonubin/sub-maker/internal/setup"
 )
 
 func Doctor() error {
@@ -37,9 +37,9 @@ func Doctor() error {
 		fmt.Printf("[INFO] detected public IP: %s\n", publicIP)
 	}
 	if cfg.Domain != "" {
-		expectedIPv4, expectedIPv6 := splitExpectedIPs(publicIP)
+		expectedIPv4, expectedIPv6 := diagnostics.SplitExpectedIPs(publicIP)
 		if publicIP == "" {
-			expectedIPv4, expectedIPv6 = splitExpectedIPs(cfg.ServerAddr)
+			expectedIPv4, expectedIPv6 = diagnostics.SplitExpectedIPs(cfg.ServerAddr)
 		}
 		result, dnsErr := diagnostics.CheckDomainDNS(context.Background(), cfg.Domain, expectedIPv4, expectedIPv6)
 		if dnsErr == nil && !diagnostics.DNSMatches(result) {
@@ -53,6 +53,10 @@ func Doctor() error {
 	}
 
 	for _, service := range managedServices {
+		if service == "subconverter" && !setup.SubconverterInstalled() {
+			fmt.Printf("[SKIP] service subconverter: binary not installed\n")
+			continue
+		}
 		check("service "+service, diagnostics.ServiceActive(service))
 	}
 
@@ -66,15 +70,4 @@ func Doctor() error {
 		return fmt.Errorf("doctor found failing checks")
 	}
 	return nil
-}
-
-func splitExpectedIPs(value string) (string, string) {
-	addr, err := netip.ParseAddr(value)
-	if err != nil {
-		return "", ""
-	}
-	if addr.Is4() {
-		return addr.String(), ""
-	}
-	return "", addr.String()
 }

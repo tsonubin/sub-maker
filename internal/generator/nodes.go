@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/tsonubin/sub-maker/internal/config"
 )
 
 // Node represents one generated inbound share link (in URI format subconverter understands).
@@ -123,144 +124,74 @@ func GenerateSS2022(serverAddr string, port int, password, method string, remark
 	return fmt.Sprintf("ss://%s@%s:%d#%s", encoded, serverAddr, port, url.PathEscape(remark))
 }
 
-// GenerateAll builds the default top-5 nodes. creds and ports come from TUI collected data.
-// ports keys: "reality", "hysteria2", "tuic", "anytls", "ss2022"
-// creds[proto]["uuid"|"pass"|"pbk"|"short_id"|"sni" ...]
+type nodeSpec struct {
+	proto         string
+	nodeProtocol  string
+	defaultRemark string
+}
+
+var nodeSpecs = []nodeSpec{
+	{"reality", "vless-reality", "VLESS-Reality"},
+	{"hysteria2", "hysteria2", "Hysteria2"},
+	{"tuic", "tuic", "TUICv5"},
+	{"anytls", "anytls", "AnyTLS"},
+	{"ss2022", "ss2022", "SS2022"},
+}
+
+func generateNode(spec nodeSpec, serverAddr, baseDomain string, port int, cred map[string]string) Node {
+	remark := spec.defaultRemark
+	if r := cred["remark"]; r != "" {
+		remark = r
+	}
+	sni := cred["sni"]
+	if sni == "" {
+		sni = baseDomain
+	}
+
+	var uri string
+	switch spec.proto {
+	case "reality":
+		if sni == "" {
+			sni = "www.microsoft.com"
+		}
+		pbk := cred["pbk"]
+		if pbk == "" {
+			pbk = "stub-public-key-replace-after-reality-gen"
+		}
+		uri = GenerateVLESSReality(serverAddr, port, sni, cred["uuid"], pbk, cred["short_id"], remark)
+	case "hysteria2":
+		uri = GenerateHysteria2(serverAddr, port, cred["pass"], sni, remark, false)
+	case "tuic":
+		uri = GenerateTUIC(serverAddr, port, cred["uuid"], cred["pass"], sni, "h3", remark)
+	case "anytls":
+		uri = GenerateAnyTLS(serverAddr, port, cred["pass"], sni, remark)
+	case "ss2022":
+		method := cred["method"]
+		if method == "" {
+			method = "2022-blake3-aes-128-gcm"
+		}
+		uri = GenerateSS2022(serverAddr, port, cred["pass"], method, remark)
+	}
+	return Node{Protocol: spec.nodeProtocol, Remark: remark, URI: uri}
+}
+
+// GenerateAll builds the default top-5 nodes.
 func GenerateAll(serverAddr, baseDomain string, ports map[string]int, creds map[string]map[string]string) []Node {
 	if serverAddr == "" {
 		serverAddr = "127.0.0.1"
 	}
-	nodes := []Node{}
-
-	// 1. VLESS Reality Vision (stealth)
-	realityCred := creds["reality"]
-	if realityCred == nil {
-		realityCred = map[string]string{}
-	}
-	realityPort := ports["reality"]
-	if realityPort == 0 {
-		realityPort = 443
-	}
-	sni := realityCred["sni"]
-	if sni == "" {
-		sni = baseDomain
-		if sni == "" {
-			sni = "www.microsoft.com"
+	nodes := make([]Node, 0, len(nodeSpecs))
+	for _, spec := range nodeSpecs {
+		port := ports[spec.proto]
+		if port == 0 {
+			port = config.DefaultPorts[spec.proto]
 		}
+		cred := creds[spec.proto]
+		if cred == nil {
+			cred = map[string]string{}
+		}
+		nodes = append(nodes, generateNode(spec, serverAddr, baseDomain, port, cred))
 	}
-	pbk := realityCred["pbk"]
-	if pbk == "" {
-		pbk = "stub-public-key-replace-after-reality-gen" // real one generated at setup from priv
-	}
-	sid := realityCred["short_id"]
-	uuidR := realityCred["uuid"]
-	remarkR := "VLESS-Reality"
-	if r, ok := realityCred["remark"]; ok && r != "" {
-		remarkR = r
-	}
-	nodes = append(nodes, Node{
-		Protocol: "vless-reality",
-		Remark:   remarkR,
-		URI:      GenerateVLESSReality(serverAddr, realityPort, sni, uuidR, pbk, sid, remarkR),
-	})
-
-	// 2. Hysteria2
-	hyCred := creds["hysteria2"]
-	if hyCred == nil {
-		hyCred = map[string]string{}
-	}
-	hyPort := ports["hysteria2"]
-	if hyPort == 0 {
-		hyPort = 8443
-	}
-	hyPass := hyCred["pass"]
-	hySNI := hyCred["sni"]
-	if hySNI == "" {
-		hySNI = baseDomain
-	}
-	hyRemark := "Hysteria2"
-	if r, ok := hyCred["remark"]; ok && r != "" {
-		hyRemark = r
-	}
-	nodes = append(nodes, Node{
-		Protocol: "hysteria2",
-		Remark:   hyRemark,
-		URI:      GenerateHysteria2(serverAddr, hyPort, hyPass, hySNI, hyRemark, false),
-	})
-
-	// 3. TUIC v5
-	tuicCred := creds["tuic"]
-	if tuicCred == nil {
-		tuicCred = map[string]string{}
-	}
-	tuicPort := ports["tuic"]
-	if tuicPort == 0 {
-		tuicPort = 9443
-	}
-	tuicUUID := tuicCred["uuid"]
-	tuicPass := tuicCred["pass"]
-	tuicSNI := tuicCred["sni"]
-	if tuicSNI == "" {
-		tuicSNI = baseDomain
-	}
-	tuicRemark := "TUICv5"
-	if r, ok := tuicCred["remark"]; ok && r != "" {
-		tuicRemark = r
-	}
-	nodes = append(nodes, Node{
-		Protocol: "tuic",
-		Remark:   tuicRemark,
-		URI:      GenerateTUIC(serverAddr, tuicPort, tuicUUID, tuicPass, tuicSNI, "h3", tuicRemark),
-	})
-
-	// 4. AnyTLS
-	anyCred := creds["anytls"]
-	if anyCred == nil {
-		anyCred = map[string]string{}
-	}
-	anyPort := ports["anytls"]
-	if anyPort == 0 {
-		anyPort = 7443
-	}
-	anyPass := anyCred["pass"]
-	anySNI := anyCred["sni"]
-	if anySNI == "" {
-		anySNI = baseDomain
-	}
-	anyRemark := "AnyTLS"
-	if r, ok := anyCred["remark"]; ok && r != "" {
-		anyRemark = r
-	}
-	nodes = append(nodes, Node{
-		Protocol: "anytls",
-		Remark:   anyRemark,
-		URI:      GenerateAnyTLS(serverAddr, anyPort, anyPass, anySNI, anyRemark),
-	})
-
-	// 5. Shadowsocks 2022
-	ssCred := creds["ss2022"]
-	if ssCred == nil {
-		ssCred = map[string]string{}
-	}
-	ssPort := ports["ss2022"]
-	if ssPort == 0 {
-		ssPort = 8388
-	}
-	ssPass := ssCred["pass"]
-	ssMethod := ssCred["method"]
-	if ssMethod == "" {
-		ssMethod = "2022-blake3-aes-128-gcm"
-	}
-	ssRemark := "SS2022"
-	if r, ok := ssCred["remark"]; ok && r != "" {
-		ssRemark = r
-	}
-	nodes = append(nodes, Node{
-		Protocol: "ss2022",
-		Remark:   ssRemark,
-		URI:      GenerateSS2022(serverAddr, ssPort, ssPass, ssMethod, ssRemark),
-	})
-
 	return nodes
 }
 
