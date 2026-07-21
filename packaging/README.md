@@ -37,7 +37,14 @@ On each `v*` release, CI:
 1. Generates `sub-maker.rb` (version + SHA256s) into the release assets
 2. Publishes it to `tsonubin/homebrew-tap` via `scripts/publish-homebrew-tap.sh`
 
-Requires repo secret **`HOMEBREW_TAP_TOKEN`**: a classic PAT with `repo` scope (so Actions can push to the tap). Without it, the formula is still attached to the GitHub Release as `sub-maker.rb`.
+**CI auth (sub-maker repo secrets)**
+
+| Secret | Purpose |
+|--------|---------|
+| `HOMEBREW_TAP_SSH_KEY` | **Preferred.** Private half of a **write** deploy key on `tsonubin/homebrew-tap` |
+| `HOMEBREW_TAP_TOKEN` | Optional fallback classic PAT with `repo` scope |
+
+Without either secret, the formula is still attached to the GitHub Release as `sub-maker.rb`; the tap is not updated automatically.
 
 ## apt / dnf (direct packages)
 
