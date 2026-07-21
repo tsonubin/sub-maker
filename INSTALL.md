@@ -1,10 +1,24 @@
-# Install sub-maker on Linux
+# Install sub-maker
 
-Step-by-step installation for a Linux VPS. After install, run the setup wizard and open the ports you need.
+Install paths for **Linux VPS** (production) and **Homebrew** on Linux or macOS (dev / demo).
 
 See [LICENSE](LICENSE) and [DISCLAIMER.md](DISCLAIMER.md) for license terms.
 
-For full product docs and operations, see [README.md](README.md) and [GUIDE.md](GUIDE.md).
+For full product docs and operations, see [README.md](README.md) and [GUIDE.md](GUIDE.md). Packaging internals: [packaging/README.md](packaging/README.md).
+
+---
+
+## Choose a path
+
+| Goal | Method |
+|------|--------|
+| Fresh Ubuntu/Debian VPS | [One-line `install.sh`](#1-one-line-install-recommended) or [`.deb`](#3-debian--ubuntu-deb) |
+| Fedora / RHEL-like VPS | [One-line `install.sh`](#1-one-line-install-recommended) or [`.rpm`](#4-fedora--rhel-like-rpm) |
+| Laptop (macOS or Linux) | [Homebrew](#5-homebrew-macos--linux) |
+| No package manager | [Manual release binary](#2-install-from-a-release-asset-manual) |
+| Contribute / hack | [Build from source](#6-build-from-source) |
+
+Production setup (`sudo sub-maker --setup`) expects **Linux + systemd**. Homebrew on macOS is fine for the binary and `SUB_MAKER_DEMO=1` testing, not for full system install.
 
 ---
 
@@ -12,8 +26,8 @@ For full product docs and operations, see [README.md](README.md) and [GUIDE.md](
 
 | Item | Notes |
 |------|--------|
-| **OS** | Linux with systemd (Ubuntu 22.04 / 24.04 or Debian 12 recommended) |
-| **Arch** | `amd64` (x86_64) or `arm64` (aarch64) |
+| **OS (production)** | Linux with systemd (Ubuntu 22.04 / 24.04 or Debian 12 recommended) |
+| **Arch** | `amd64` (x86_64) or `arm64` (aarch64); macOS via Homebrew too |
 | **Privileges** | Root/sudo for production install (writes `/usr/local/bin`, `/etc`, systemd) |
 | **Network** | Outbound HTTPS (GitHub releases, ACME, downloads) |
 | **Tools** | `curl` (required for one-liner). `tar` / `gzip` usually present |
@@ -92,7 +106,86 @@ Useful if you prefer not to pipe a script to bash.
 
 ---
 
-## 3. Build from source
+## 3. Debian / Ubuntu (`.deb`)
+
+Each release publishes architecture-specific packages (names include the version):
+
+- `sub-maker_<VERSION>_amd64.deb`
+- `sub-maker_<VERSION>_arm64.deb`
+
+Example for the latest version on amd64 (replace `VERSION` and arch as needed — check [Releases](https://github.com/tsonubin/sub-maker/releases)):
+
+```bash
+ARCH=amd64   # or arm64
+# Discover latest tag (optional)
+TAG=$(curl -fsSL https://api.github.com/repos/tsonubin/sub-maker/releases/latest | sed -n 's/.*"tag_name": "\(.*\)".*/\1/p' | head -1)
+VERSION=${TAG#v}
+
+curl -fLO "https://github.com/tsonubin/sub-maker/releases/download/${TAG}/sub-maker_${VERSION}_${ARCH}.deb"
+curl -fLO "https://github.com/tsonubin/sub-maker/releases/download/${TAG}/checksums.txt"
+sha256sum -c checksums.txt --ignore-missing
+
+sudo dpkg -i "sub-maker_${VERSION}_${ARCH}.deb"
+sub-maker --version
+```
+
+There is **no hosted apt repository** yet; install the `.deb` directly (or use `install.sh`). A future apt repo can serve these same packages.
+
+---
+
+## 4. Fedora / RHEL-like (`.rpm`)
+
+Release assets:
+
+- `sub-maker-<VERSION>-1.x86_64.rpm`
+- `sub-maker-<VERSION>-1.aarch64.rpm`
+
+```bash
+# Example for x86_64 — set TAG/VERSION from the Releases page
+TAG=v0.2.1
+VERSION=0.2.1
+
+curl -fLO "https://github.com/tsonubin/sub-maker/releases/download/${TAG}/sub-maker-${VERSION}-1.x86_64.rpm"
+sudo dnf install "./sub-maker-${VERSION}-1.x86_64.rpm"
+# or: sudo rpm -Uvh ./sub-maker-*.rpm
+sub-maker --version
+```
+
+---
+
+## 5. Homebrew (macOS + Linux)
+
+Uses prebuilt GitHub Release binaries (macOS and Linux bottles).
+
+```bash
+brew tap tsonubin/sub-maker https://github.com/tsonubin/sub-maker
+brew install sub-maker
+sub-maker --version
+```
+
+Or install the formula file from the latest release:
+
+```bash
+brew install --formula \
+  https://github.com/tsonubin/sub-maker/releases/latest/download/sub-maker.rb
+```
+
+Upgrade:
+
+```bash
+brew update
+brew upgrade sub-maker
+```
+
+On macOS, prefer demo mode — production paths and systemd are Linux-oriented:
+
+```bash
+SUB_MAKER_DEMO=1 sub-maker --setup
+```
+
+---
+
+## 6. Build from source
 
 Needs a Rust toolchain and a C linker (`build-essential` / `gcc` on Debian/Ubuntu).
 
@@ -139,7 +232,7 @@ sudo make install   # installs ./sub-maker to /usr/local/bin
 
 ---
 
-## 4. Run production setup
+## 7. Run production setup
 
 On the VPS (interactive TTY required for the wizard):
 
@@ -198,7 +291,7 @@ Add the printed **Subscription** URL as a remote config in Clash / Clash Meta / 
 
 ---
 
-## 5. Demo install (no root)
+## 8. Demo install (no root)
 
 For local testing without touching system paths:
 
@@ -224,14 +317,24 @@ sub-maker --serve
 
 ---
 
-## 6. Upgrade
+## 9. Upgrade
 
-**sub-maker binary**
+**sub-maker binary** (pick the channel you used)
 
 ```bash
+# install.sh
 curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh | sudo bash
-# or with forced reinstall if the service is running:
-# curl -fsSL ... | sudo env SUB_MAKER_INSTALL_REINSTALL=1 bash
+# or: sudo env SUB_MAKER_INSTALL_REINSTALL=1 bash when the service holds the binary
+
+# Homebrew
+brew upgrade sub-maker
+
+# deb / rpm — download the new package from Releases and dpkg/dnf install again
+```
+
+Then restart the subscription unit if it is running:
+
+```bash
 sudo systemctl restart sub-maker-sub
 ```
 
@@ -250,7 +353,7 @@ sudo sub-maker config
 
 ---
 
-## 7. Uninstall (manual)
+## 10. Uninstall (manual)
 
 There is no automated uninstaller. To remove a production install:
 

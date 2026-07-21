@@ -4,18 +4,25 @@
 
 See [LICENSE](LICENSE) for terms. Restricted license: viewing source for personal research/education only; forking or any use/deployment by others requires prior written permission.
 
-## Install (Linux)
+## Install
 
-**Quick production install** on a VPS:
+**Linux VPS (production):**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh | sudo bash
 sudo sub-maker --setup
 ```
 
-Full Linux install options (one-liner, manual release assets, build from source, firewall, upgrade, uninstall):
+**Homebrew (macOS or Linux — great for dev/demo):**
 
-→ **[INSTALL.md](INSTALL.md)**
+```bash
+brew tap tsonubin/sub-maker https://github.com/tsonubin/sub-maker
+brew install sub-maker
+```
+
+**Debian/Ubuntu `.deb` / Fedora `.rpm`:** download the package from [Releases](https://github.com/tsonubin/sub-maker/releases) (`sub-maker_*.deb` / `sub-maker-*.rpm`) and install with `dpkg` / `dnf`. Details in **[INSTALL.md](INSTALL.md)**.
+
+Also covered there: manual binaries, build from source, firewall, upgrade, uninstall.
 
 Demo without root:
 
@@ -116,11 +123,16 @@ sudo sub-maker config
 
 GitHub Actions builds on tags (`v*`) and attaches:
 
-- `sub-maker-linux-amd64`
-- `sub-maker-linux-arm64`
-- `checksums.txt`
+| Asset | Platform |
+|-------|----------|
+| `sub-maker-linux-amd64` / `arm64` | Linux raw binaries |
+| `sub-maker-darwin-amd64` / `arm64` | macOS (Homebrew) |
+| `sub-maker_*_{amd64,arm64}.deb` | Debian / Ubuntu |
+| `sub-maker-*-1.{x86_64,aarch64}.rpm` | Fedora / RHEL-like |
+| `sub-maker.rb` | Homebrew formula (pinned checksums) |
+| `checksums.txt` | SHA-256 for the above |
 
-`install.sh` prefers those assets. To cut a release: tag `vX.Y.Z`, push the tag; see `.github/workflows/release.yml`.
+`install.sh` and package managers consume these assets. To cut a release: tag `vX.Y.Z` and push the tag; see `.github/workflows/release.yml` and [packaging/README.md](packaging/README.md).
 
 ## Architecture
 
@@ -146,7 +158,7 @@ sudo sub-maker --update
 sudo sub-maker restart
 ```
 
-See [INSTALL.md § Upgrade](INSTALL.md#6-upgrade).
+See [INSTALL.md § Upgrade](INSTALL.md#9-upgrade).
 
 ## Troubleshooting
 

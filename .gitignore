@@ -12,6 +12,10 @@
 # Built binary - do not commit the executable
 /sub-maker
 /sub-maker-*
+# Keep packaging templates/scripts; ignore release artifacts in repo root
+/*.deb
+/*.rpm
+/checksums.txt
 
 # IDE and editor files
 .idea/

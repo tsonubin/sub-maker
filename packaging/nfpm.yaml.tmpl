@@ -1,0 +1,26 @@
+# nfpm config template. Placeholders: __NAME__ __VERSION__ __ARCH__ __BIN__
+# https://nfpm.goreleaser.com/configuration/
+name: __NAME__
+arch: __ARCH__
+platform: linux
+version: __VERSION__
+section: utils
+priority: optional
+maintainer: "sub-maker maintainers <noreply@users.noreply.github.com>"
+description: |
+  TUI tool to set up a proxy server on a VPS using sing-box.
+  Supports VLESS+Reality, Hysteria2, TUIC, AnyTLS, Shadowsocks 2022,
+  certificates, systemd units, and a Clash subscription endpoint.
+vendor: sub-maker
+homepage: https://github.com/tsonubin/sub-maker
+license: LicenseRef-Proprietary
+contents:
+  - src: __BIN__
+    dst: /usr/local/bin/sub-maker
+    file_info:
+      mode: 0755
+overrides:
+  deb:
+    scripts: {}
+  rpm:
+    scripts: {}

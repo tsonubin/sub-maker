@@ -5,18 +5,25 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.2.1); empty uses workflow ref'
+        required: false
+        default: ''
 
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CARGO_TERM_COLOR: always
+
 jobs:
-  release:
+  # ── Linux: amd64 + arm64 binaries ───────────────────────────────────────
+  build-linux:
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -38,25 +45,160 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           EOF
 
-      - name: Run tests
-        run: cargo test
+      - name: Test
+        run: cargo test --locked
 
-      - name: Build release binaries
-        run: make build-linux
-
-      - name: Generate checksums
+      - name: Build
         run: |
-          sha256sum sub-maker-linux-amd64 sub-maker-linux-arm64 > checksums.txt
+          cargo build --release --locked --target x86_64-unknown-linux-gnu
+          cargo build --release --locked --target aarch64-unknown-linux-gnu
+          cp target/x86_64-unknown-linux-gnu/release/sub-maker sub-maker-linux-amd64
+          cp target/aarch64-unknown-linux-gnu/release/sub-maker sub-maker-linux-arm64
+          chmod 755 sub-maker-linux-amd64 sub-maker-linux-arm64
+
+      - name: Upload linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-linux
+          path: |
+            sub-maker-linux-amd64
+            sub-maker-linux-arm64
+
+  # ── macOS: arm64 + amd64 (cross from Apple Silicon runner) ────────────
+  build-darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          cp target/aarch64-apple-darwin/release/sub-maker sub-maker-darwin-arm64
+          cp target/x86_64-apple-darwin/release/sub-maker sub-maker-darwin-amd64
+          chmod 755 sub-maker-darwin-arm64 sub-maker-darwin-amd64
+
+      - name: Upload darwin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries-darwin
+          path: |
+            sub-maker-darwin-arm64
+            sub-maker-darwin-amd64
+
+  # ── Package + GitHub Release ────────────────────────────────────────────
+  release:
+    needs: [build-linux, build-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          case "$TAG" in
+            v*) VERSION="${TAG#v}" ;;
+            *) VERSION="$TAG"; TAG="v$TAG" ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG ($VERSION)"
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Layout dist/
+        run: |
+          mkdir -p dist
+          # artifacts may already be flat under dist/
+          find dist -type f -name 'sub-maker-*' -exec mv -n {} dist/ \; 2>/dev/null || true
+          ls -la dist/
+
+      - name: Install nfpm
+        run: |
+          curl -sSfL https://github.com/goreleaser/nfpm/releases/download/v2.41.3/nfpm_2.41.3_Linux_x86_64.tar.gz \
+            | tar -xz -C /tmp nfpm
+          sudo mv /tmp/nfpm /usr/local/bin/nfpm
+          nfpm --version
+
+      - name: Build deb + rpm
+        run: |
+          chmod +x scripts/package-linux.sh scripts/generate-homebrew-formula.sh
+          ./scripts/package-linux.sh "${{ steps.ver.outputs.version }}" dist
+
+      - name: Generate Homebrew formula
+        run: |
+          ./scripts/generate-homebrew-formula.sh "${{ steps.ver.outputs.version }}" dist Formula/sub-maker.rb
+          cp Formula/sub-maker.rb dist/sub-maker.rb
+
+      - name: Checksums
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          FILES=(
+            sub-maker-linux-amd64
+            sub-maker-linux-arm64
+            sub-maker-darwin-amd64
+            sub-maker-darwin-arm64
+            sub-maker.rb
+            sub-maker_*.deb
+            sub-maker-*.rpm
+          )
+          sha256sum "${FILES[@]}" > checksums.txt
+          cat checksums.txt
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            sub-maker-linux-amd64
-            sub-maker-linux-arm64
-            checksums.txt
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
           draft: false
           prerelease: false
           generate_release_notes: true
+          files: |
+            dist/sub-maker-linux-amd64
+            dist/sub-maker-linux-arm64
+            dist/sub-maker-darwin-amd64
+            dist/sub-maker-darwin-arm64
+            dist/sub-maker.rb
+            dist/checksums.txt
+            dist/*.deb
+            dist/*.rpm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit updated Homebrew formula to main
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Keep generated formula + binaries from this job workspace
+          cp Formula/sub-maker.rb /tmp/sub-maker.rb.generated
+          DIST_ABS="$(pwd)/dist"
+          git fetch origin main
+          git checkout -B main origin/main
+          cp /tmp/sub-maker.rb.generated Formula/sub-maker.rb
+          if git diff --quiet Formula/sub-maker.rb; then
+            echo "Formula unchanged on main"
+            exit 0
+          fi
+          git add Formula/sub-maker.rb
+          git commit -m "chore: update Homebrew formula for ${{ steps.ver.outputs.tag }}"
+          git push origin main
