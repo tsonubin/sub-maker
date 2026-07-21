@@ -1,6 +1,6 @@
 [package]
 name = "sub-maker"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "TUI tool to set up a proxy server on a VPS using sing-box"
 license = "LicenseRef-Proprietary"
