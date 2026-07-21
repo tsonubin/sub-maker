@@ -1,212 +1,165 @@
 # sub-maker
 
-**sub-maker** is a TUI tool to set up a proxy server on a VPS using sing-box. It supports multiple protocols, verifies domain DNS, handles certificates via Certbot or acme.sh, starts services, and provides a Clash subscription endpoint on port 8964.
+**sub-maker** is a Rust TUI tool to set up a proxy server on a Linux VPS with [sing-box](https://github.com/SagerNet/sing-box). It walks you through multi-protocol setup, DNS and certificates, systemd services, and a Clash subscription endpoint (default port **8964**).
 
-See [LICENSE](LICENSE) for terms. This is a restricted license: viewing source for personal research/education only; forking or any use/deployment by others requires prior written permission.
+See [LICENSE](LICENSE) for terms. Restricted license: viewing source for personal research/education only; forking or any use/deployment by others requires prior written permission.
 
-## Quick Start
+## Install (Linux)
+
+**Quick production install** on a VPS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh | sudo bash
 sudo sub-maker --setup
 ```
 
-Production setup finishes by starting services, verifying the local subscription endpoint, and printing your subscription URL. If DNS or certificates are not ready, setup stops with the exact record or cert action needed.
+Full Linux install options (one-liner, manual release assets, build from source, firewall, upgrade, uninstall):
 
-See the full usage below and GUIDE.md for details.
+→ **[INSTALL.md](INSTALL.md)**
+
+Demo without root:
+
+```bash
+SUB_MAKER_DEMO=1 sub-maker --setup
+```
 
 ## What it does
 
-- Interactive setup wizard for server configuration.
-- Supports VLESS+Reality, Hysteria2, TUICv5, AnyTLS, and Shadowsocks 2022 via sing-box.
-- DNS checks for domain-based setup.
-- Certificate handling through Certbot HTTP-01, acme.sh HTTP-01/DNS-01, existing cert files, or self-signed fallback.
-- Built-in Clash subscription server on 8964 with rulesets.
-- Systemd service generation for easy deployment.
-- Operational commands: `config`, `doctor`, `link`, `links`, `status`, `restart`, `start`, `stop`.
-- Demo mode for testing without root.
+- Full-screen **ratatui** setup / config wizard (step sidebar, forms, review)
+- Protocols via sing-box: **VLESS+Reality**, **Hysteria2**, **TUIC v5**, **AnyTLS**, **Shadowsocks 2022**
+- DNS checks for domain-based (production) setup
+- Certificates: Certbot HTTP-01, acme.sh HTTP-01 / Cloudflare DNS-01, existing files, or self-signed
+- Clash subscription server with common rulesets; raw URI list at `/raw`
+- Systemd units for sing-box, subconverter, and the subscription service
+- Ops commands: `config`, `doctor`, `link`, `links`, `status`, `restart`, `start`, `stop`, `--update`
 
-See below for commands and GUIDE.md for full tutorial.
+Longer tutorial: **[GUIDE.md](GUIDE.md)**.
 
-## Prerequisites
+## Prerequisites (summary)
 
-- A Linux VPS (Ubuntu 22.04 / 24.04 or Debian 12 recommended; other distros may work with manual adjustments).
-- **Root / sudo privileges are required for a full real installation** on a production server. The tool performs system-level operations that need elevated privileges:
-  - Installs sing-box binary to `/usr/local/bin/sing-box`.
-  - Installs subconverter to `/opt/subconverter`.
-  - Writes systemd unit files to `/etc/systemd/system/`.
-  - Writes persistent configs to `/etc/sub-maker/`.
-  - May install/run Certbot or acme.sh for certificates.
-- **You do *not* need sudo for testing/demo/CI**:
-  - Use `SUB_MAKER_DEMO=1 ./sub-maker --setup` (or in TUI flows). This redirects configs to `/tmp/sub-maker-demo-etc/...` (user-writable), installs sing-box to `~/.local/bin/sing-box` and subconverter to `~/.local/subconverter` (fully user-writable, no root needed), skips real service enabling.
-  - You can then run `./sub-maker --serve` as a regular user (using env vars like `SUB_MAKER_NODES_FILE=...` and `SUB_MAKER_PORT=...` to point to demo paths).
-  - The `sub-maker` Rust binary itself (the TUI + server) does **not** require special privileges to *run* — only the *setup* in real (non-DEMO) mode does for system paths.
-- Outbound internet access from the VPS (to download binaries, obtain certificates, etc.).
-- (Recommended) A domain name pointed at the VPS IP (for real TLS certificates via ACME). You can use a subdomain (e.g. `proxy.example.com`).
-- For Cloudflare DNS-01: a Cloudflare API token with DNS edit permissions for the zone.
-- Open inbound ports on your firewall / VPS provider security group for the protocols you enable (default suggestions: 443 for Reality, 8443 for Hysteria2, 9443 for TUIC, 7443 for AnyTLS, 8388 for SS2022, plus 8964 for the subscription, and temporarily 80 for HTTP-01 ACME if used).
-- `curl`, `tar`, `gzip` (usually present).
+| | Production | Demo (`SUB_MAKER_DEMO=1`) |
+|--|------------|---------------------------|
+| OS | Linux + systemd | Same or any host for smoke tests |
+| Privileges | **sudo/root** | Regular user |
+| Paths | `/etc/sub-maker`, `/etc/sing-box`, `/usr/local/bin`, `/opt/subconverter` | `/tmp/sub-maker-demo-etc`, `~/.local/...` |
+| Domain | Strongly recommended (ACME + client URLs) | Optional |
 
-The tool will attempt to install Certbot or acme.sh automatically when needed.
+Also needed: outbound HTTPS, open firewall ports for enabled protocols, and tools like `curl` / `tar` for install and downloads.
 
-## Quick Start
+Details: [INSTALL.md](INSTALL.md#requirements).
+
+## After setup
 
 ```bash
-# 1. Install the binary (recommended: one-liner pulls pre-built release binary)
-curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh | sudo bash
-
-# 2. Run the interactive setup wizard
-# - For real production install (writes system files): use sudo
-sudo sub-maker --setup
-# - For testing/demo (no sudo needed, everything in /tmp):
-# SUB_MAKER_DEMO=1 sub-maker --setup
-
-# Follow the TUI prompts:
-# - Production domain setup or IP-only / advanced setup
-# - Server public IP (auto-detected when possible)
-# - Domain for DNS, certificates, and domain-based subscription
-# - Email for certificate issuance
-# - Subscription token (leave blank to auto-generate)
-# - SSH link retrieval passcode (leave blank to auto-generate)
-# - Subscription port (default 8964)
-# - Select which of the 5 protocols to enable
-# - Per-protocol ports, credentials, SNI, Reality shortId, etc.
-# - Certificate mode (certbot-http, acme-http, acme-dns-cf, existing, or self-signed)
-
-# 3. Open the necessary ports in your firewall/provider security group
-# Example with ufw:
-sudo ufw allow 8964/tcp
-sudo ufw allow 443/tcp     # Reality
-sudo ufw allow 8443/udp    # Hysteria2
-# ... add the other protocol ports you enabled
-
-# 4. Inspect final links and health
-sudo sub-maker links
-sudo sub-maker link
-sudo sub-maker doctor
-```
-
-In Clash, Clash Meta, Stash, etc., add the URL above as a subscription source. It will contain all your enabled nodes plus a rich set of routing rules.
-
-You can also view the raw node list at `/raw?token=YOUR-TOKEN`.
-
-## Releases and Automated Install
-
-We use GitHub Actions to automatically build and publish release binaries whenever a new version tag (e.g. `v1.0.0`) is pushed.
-
-- Binaries for `linux/amd64` and `linux/arm64` are attached to each release.
-- A `checksums.txt` is also provided.
-
-The `install.sh` script now prefers downloading the pre-built binary matching your architecture from the latest release:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh | sudo bash
-```
-
-This will place `sub-maker` in `/usr/local/bin` without needing Rust installed on the target machine (unless falling back to a source build).
-
-The repository is public so that release binaries can be downloaded anonymously by `install.sh` (and `curl`) on any server without requiring `gh auth` or tokens. This is required for the "install on a fresh/random server" use case.
-
-To create a release:
-1. `git tag vX.Y.Z`
-2. `git push origin vX.Y.Z`
-3. The workflow will build, create the GitHub Release, and attach the assets.
-
-See `.github/workflows/release.yml` for details.
-
-## Detailed Usage
-
-### Commands
-
-| Command / Flag | Description | Example |
-|---|---|---|
-| `setup` / `--setup` | Launch the production-first TUI wizard and apply configuration | `sudo sub-maker setup` |
-| `config` / `configure` | Edit the existing setup, preserve current secrets by default, then reapply | `sudo sub-maker config` |
-| `serve` / `--serve` | Run the subscription HTTP server | `sub-maker serve` |
-| `nodes` / `--nodes` | Print generated node URIs from `/etc/sub-maker/nodes.txt` | `sudo sub-maker nodes` |
-| `link` | Print only the subscription URL after passcode verification, useful over SSH | `sudo sub-maker link` |
-| `links` | Print subscription, raw node, and IP fallback URLs | `sudo sub-maker links` |
-| `doctor` | Check config, nodes, DNS, certs, services, and local subscription endpoint | `sudo sub-maker doctor` |
-| `status` | Show systemd status for sing-box and sub-maker-sub | `sudo sub-maker status` |
-| `restart` | Restart sing-box and sub-maker-sub | `sudo sub-maker restart` |
-| `start` / `stop` | Start or stop managed services | `sudo sub-maker start` |
-| `--update` | Update sing-box and subconverter binaries | `sudo sub-maker --update` |
-| `--version` | Print version | `sub-maker --version` |
-
-Environment variables (useful for scripting / containers):
-
-- `SUB_MAKER_DEMO=1` — Run `--setup` in non-interactive demo mode (writes to `/tmp/sub-maker-demo-etc/...`).
-- `SUB_MAKER_TOKEN=xxx` — Override the token used by the server (for `--serve`).
-- `SUB_MAKER_PORT=8964` — Override the subscription listen port.
-- `SUB_MAKER_NODES_FILE=/path/to/nodes.txt` — Override the nodes file used by the server (useful for testing or custom locations).
-
-### Post-Setup Checks
-
-After a successful real setup, services are already started and the local subscription endpoint has been verified. Useful commands:
-
-```bash
-sudo sub-maker config
-sudo sub-maker links
-sudo sub-maker link
+sudo sub-maker links      # subscription + raw (+ IP fallback)
+sudo sub-maker link       # subscription URL only (passcode)
 sudo sub-maker doctor
 sudo sub-maker status
-sudo journalctl -u sub-maker-sub -f
 ```
 
-For remote retrieval, SSH into the server and ask for only the subscription URL:
+Example firewall (adjust to what you enabled):
+
+```bash
+sudo ufw allow 8964/tcp
+sudo ufw allow 443/tcp      # Reality
+sudo ufw allow 8443/udp     # Hysteria2
+# … TUIC 9443/udp, AnyTLS 7443/tcp, SS2022 8388/tcp+udp
+```
+
+In Clash / Clash Meta / Stash / similar, add the printed **Subscription** URL. Raw nodes: `http://HOST:PORT/raw?token=YOUR-TOKEN`.
+
+Remote URL only over SSH:
 
 ```bash
 ssh root@YOUR-SERVER 'sub-maker link'
 printf '%s\n' 'YOUR-LINK-PASSCODE' | ssh root@YOUR-SERVER 'sub-maker link --passcode-stdin'
 ```
 
-**Important**: Use `sudo sub-maker config` to change protocols, ports, credentials, certificate mode, token, or passcode after first setup. It loads the existing config, preserves current secrets when secret fields are left blank, reapplies generated files, and restarts/verifies services.
+Reconfigure later (keeps secrets when fields are left blank):
 
-### DNS And Certificate Notes
+```bash
+sudo sub-maker config
+```
 
-- Production mode requires a domain whose DNS points to the detected server IP. If it does not, setup prints the exact `A` or `AAAA` record to create.
-- Hysteria2, TUIC, and AnyTLS require readable certificate files.
-- Reality does not require a local server certificate, but uses a separate camouflage target domain.
-- Shadowsocks 2022 does not require certificates.
-- Certbot HTTP-01 is the recommended certificate strategy. It requires DNS to be correct and port 80 to be free during issuance.
-- acme.sh HTTP-01 and Cloudflare DNS-01 remain available.
-- Existing cert mode validates cert/key files and domain coverage before continuing.
-- Certificates are copied or generated at `/etc/sub-maker/certs/{fullchain.pem,privkey.pem}` and referenced by sing-box.
+## Commands
 
-### Using the Raw Nodes
+| Command / flag | Description |
+|----------------|-------------|
+| `setup` / `--setup` | Interactive production-first wizard and apply |
+| `config` / `configure` | Edit existing setup, reapply |
+| `serve` / `--serve` | Run subscription HTTP server (used by systemd) |
+| `nodes` / `--nodes` | Print node URIs from `nodes.txt` |
+| `link` | Subscription URL after passcode check |
+| `links` | Subscription, raw, and IP fallback URLs |
+| `doctor` | Config, DNS, certs, services, local `/sub` |
+| `status` / `start` / `stop` / `restart` | Managed systemd units |
+| `--update` | Refresh sing-box + subconverter binaries |
+| `--version` | Print version |
 
-The `/raw` endpoint is useful if you want to:
+**Environment**
 
-- Feed the nodes into your own subconverter instance (with custom rules/pref).
-- Use with other subscription converters or clients that prefer URI lists.
+| Variable | Purpose |
+|----------|---------|
+| `SUB_MAKER_DEMO=1` | Non-interactive demo paths; no real service enable |
+| `SUB_MAKER_TOKEN` | Token for `--serve` |
+| `SUB_MAKER_PORT` | Listen port for `--serve` (default 8964) |
+| `SUB_MAKER_NODES_FILE` | Path to `nodes.txt` for `--serve` |
 
-Example: `http://your-server:8964/raw?token=YOUR-TOKEN`
+## DNS and certificates
 
-### Updating
+- **Production** mode expects a domain whose DNS points at this server; mismatch shows the exact `A`/`AAAA` record (you can continue anyway).
+- **Hysteria2 / TUIC / AnyTLS** need readable cert/key files; **Reality** uses a camouflage target (no local server cert); **SS2022** needs none.
+- Preferred cert path: **Certbot HTTP-01** (correct DNS + free port 80). Alternatives: acme.sh HTTP-01, Cloudflare DNS-01, existing files, self-signed.
+- Managed files: `/etc/sub-maker/certs/{fullchain.pem,privkey.pem}`.
 
-- Re-run `./sub-maker --setup` (it will re-download binaries if you use `--update` once implemented, or you can manually upgrade).
-- For sing-box / subconverter updates: run `sudo sub-maker --update`, then `sudo sub-maker restart`.
+## Releases
 
-## Architecture Overview
+GitHub Actions builds on tags (`v*`) and attaches:
 
-- **sing-box** runs as the actual proxy server with multiple inbounds (one per enabled protocol).
-- **subconverter** (the fork) is prepared with your nodes.txt + a rich rules config (ACL4SSR_Online_Full by default). It can be used standalone on port 25500 if you want.
-- The **subscription server** (sub-maker, written in Rust) serves the Clash YAML on 8964. It reads `nodes.txt` and constructs (or can proxy to) the final config containing both your nodes and the common rulesets.
-- Configuration is stored in `/etc/sub-maker/config.yaml`.
-- Nodes (share links) are in `/etc/sub-maker/nodes.txt`.
-- sing-box config: `/etc/sing-box/config.json`.
-- Certificates: `/etc/sub-maker/certs/`.
-- Systemd units: `/etc/systemd/system/{sing-box,subconverter,sub-maker-sub}.service`.
+- `sub-maker-linux-amd64`
+- `sub-maker-linux-arm64`
+- `checksums.txt`
+
+`install.sh` prefers those assets. To cut a release: tag `vX.Y.Z`, push the tag; see `.github/workflows/release.yml`.
+
+## Architecture
+
+| Component | Role |
+|-----------|------|
+| **sing-box** | Proxy inbounds (one per enabled protocol) |
+| **subconverter** | Optional converter stack + ACL rules under `/opt/subconverter` |
+| **sub-maker** | Rust TUI + subscription server (`/sub`, `/raw`) |
+| **config** | `/etc/sub-maker/config.yaml` |
+| **nodes** | `/etc/sub-maker/nodes.txt` |
+| **sing-box config** | `/etc/sing-box/config.json` |
+| **units** | `sing-box`, `subconverter`, `sub-maker-sub` under `/etc/systemd/system/` |
+
+## Updating
+
+```bash
+# sub-maker binary
+curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh | sudo bash
+sudo systemctl restart sub-maker-sub
+
+# proxy stack binaries only
+sudo sub-maker --update
+sudo sub-maker restart
+```
+
+See [INSTALL.md § Upgrade](INSTALL.md#6-upgrade).
 
 ## Troubleshooting
 
-- **No nodes found / empty subscription**: Make sure you ran `--setup` successfully and the token is correct. Check `/etc/sub-maker/nodes.txt`.
-- **Certificate errors**: For HTTP-01, ensure DNS points to this server and nothing else is listening on port 80 during issuance. Use DNS-01 if port 80 is problematic. Check Certbot output or acme.sh logs in `~/.acme.sh/`.
-- **Connection refused on 8964**: The sub-maker-sub unit may not be running. Check `systemctl status sub-maker-sub`.
-- **Clients can't connect to protocols**: Verify firewall / security group rules, that the correct ports are in the sing-box config, and that the client is using the exact share links from `/raw` or the subscription.
-- **Hysteria2 / TUIC / AnyTLS performance issues**: These benefit from a domain + real certificate. Reality works well even without.
-- **Demo mode vs real**: In demo the paths are under `/tmp/...` and services are not really started. Use real mode on a VPS for production.
-- **sing-box fails to start**: Check `journalctl -u sing-box -xe`. Common causes: port conflicts, missing cert files for TLS protocols, or firewall/provider port blocks. Setup now generates Reality keypairs automatically.
+| Symptom | Check |
+|---------|--------|
+| Empty subscription | Setup completed? Token correct? `/etc/sub-maker/nodes.txt` |
+| Cert / ACME failures | DNS to this host; port 80 free for HTTP-01; or use DNS-01 |
+| Nothing on 8964 | `systemctl status sub-maker-sub`; `journalctl -u sub-maker-sub` |
+| Clients fail | Firewall / SG, ports in config, URIs from `links` / `/raw` |
+| sing-box won’t start | `journalctl -u sing-box -xe` — ports, missing certs |
+| Demo vs prod | Demo under `/tmp/...`, no real systemd enable |
+
+`sudo sub-maker doctor` runs a combined health pass.
 
 ## Development
 
@@ -214,42 +167,35 @@ Example: `http://your-server:8964/raw?token=YOUR-TOKEN`
 git clone https://github.com/tsonubin/sub-maker.git
 cd sub-maker
 cargo build --release
-cp target/release/sub-maker ./sub-maker
-./sub-maker --help
+./target/release/sub-maker --help
 
-# Quick demo (no root, no real services)
-SUB_MAKER_DEMO=1 ./sub-maker --setup
-./sub-maker --nodes
-SUB_MAKER_DEMO=1 SUB_MAKER_TOKEN=demo-token-123 ./sub-maker --serve &
-curl 'http://127.0.0.1:8964/sub?token=demo-token-123' | head -c 800
+SUB_MAKER_DEMO=1 cargo run -- --setup
+cargo test
+make build-linux   # cross targets when configured
 ```
 
-See `Makefile` for cross-build targets (`make build-linux`).
-
-The project follows the design documented in the session `plan.md`.
-
-Contributions are welcome! Please follow the architecture (TUI collects → Apply does the heavy lifting using templates → server is a thin dynamic provider).
+Stack: Rust, **ratatui** + crossterm TUI, clap CLI. Layout: collect in TUI → `setup::apply` (templates + downloads) → thin HTTP subscription server.
 
 ## License
 
-**This is a highly restrictive source-available license, not a standard open source license.**
+**Highly restrictive source-available terms — not a standard open-source license.**
 
-The full terms are in the [LICENSE](LICENSE) file (incorporated with DISCLAIMER.md).
+Full text: [LICENSE](LICENSE) (with [DISCLAIMER.md](DISCLAIMER.md)).
 
-In summary:
-- Only browser-based viewing of the source for personal research/education is permitted.
-- **Any forking, use, deployment (private or otherwise), modification, or redistribution requires prior express written permission.**
-
-Unauthorized exercise of copyright rights is prohibited. See the LICENSE for complete legal terms, liability limitations, indemnification, and termination provisions.
+In short: browser viewing of source for personal research/education only. **Forking, use, deployment, modification, or redistribution requires prior written permission.**
 
 ## Acknowledgments
 
-- [SagerNet/sing-box](https://github.com/SagerNet/sing-box) — the excellent universal proxy platform.
-- [tindy2013/subconverter](https://github.com/tindy2013/subconverter) and community forks (especially asdlokj1qpi233) for subscription conversion and rich rule support.
-- ACL4SSR project for the excellent common rule sets.
-- acme.sh for easy certificate automation.
-- The many researchers and developers working on censorship circumvention (Reality, Hysteria2, TUIC, etc.).
+- [SagerNet/sing-box](https://github.com/SagerNet/sing-box)
+- [tindy2013/subconverter](https://github.com/tindy2013/subconverter) and community forks (e.g. asdlokj1qpi233)
+- ACL4SSR rule sets
+- acme.sh
+- Work on Reality, Hysteria2, TUIC, and related protocols
 
 ---
 
-For a step-by-step tutorial with more explanations, screenshots descriptions, firewall examples, client configuration, and advanced usage, see **GUIDE.md**.
+| Doc | Contents |
+|-----|----------|
+| **[INSTALL.md](INSTALL.md)** | Linux install, firewall, upgrade, uninstall |
+| **[GUIDE.md](GUIDE.md)** | Extended tutorial and operations |
+| **[DISCLAIMER.md](DISCLAIMER.md)** | Legal disclaimer |
