@@ -143,8 +143,8 @@ jobs:
 
       - name: Generate Homebrew formula
         run: |
-          ./scripts/generate-homebrew-formula.sh "${{ steps.ver.outputs.version }}" dist Formula/sub-maker.rb
-          cp Formula/sub-maker.rb dist/sub-maker.rb
+          chmod +x scripts/generate-homebrew-formula.sh scripts/publish-homebrew-tap.sh
+          ./scripts/generate-homebrew-formula.sh "${{ steps.ver.outputs.version }}" dist dist/sub-maker.rb
 
       - name: Checksums
         working-directory: dist
@@ -182,23 +182,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Commit updated Homebrew formula to main
+      # Requires repo secret HOMEBREW_TAP_TOKEN (classic PAT with `repo` on tsonubin/homebrew-tap).
+      - name: Publish formula to tsonubin/homebrew-tap
         if: startsWith(github.ref, 'refs/tags/v')
         continue-on-error: true
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_REPO: tsonubin/homebrew-tap
         run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # Keep generated formula + binaries from this job workspace
-          cp Formula/sub-maker.rb /tmp/sub-maker.rb.generated
-          DIST_ABS="$(pwd)/dist"
-          git fetch origin main
-          git checkout -B main origin/main
-          cp /tmp/sub-maker.rb.generated Formula/sub-maker.rb
-          if git diff --quiet Formula/sub-maker.rb; then
-            echo "Formula unchanged on main"
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN not set — skip tap publish."
+            echo "Add a classic PAT (repo scope) as secret HOMEBREW_TAP_TOKEN to enable:"
+            echo "  brew tap tsonubin/tap && brew install sub-maker"
             exit 0
           fi
-          git add Formula/sub-maker.rb
-          git commit -m "chore: update Homebrew formula for ${{ steps.ver.outputs.tag }}"
-          git push origin main
+          ./scripts/publish-homebrew-tap.sh "${{ steps.ver.outputs.version }}" dist/sub-maker.rb

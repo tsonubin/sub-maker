@@ -25,18 +25,19 @@ Requires [nfpm](https://nfpm.goreleaser.com/) (`go install github.com/goreleaser
 
 ## Homebrew
 
-Formula lives at [`Formula/sub-maker.rb`](../Formula/sub-maker.rb) so this repo can be tapped:
+Personal tap: **[tsonubin/homebrew-tap](https://github.com/tsonubin/homebrew-tap)**
 
 ```bash
-brew tap tsonubin/sub-maker https://github.com/tsonubin/sub-maker
+brew tap tsonubin/tap
 brew install sub-maker
 ```
 
-Or install the formula file from a release:
+On each `v*` release, CI:
 
-```bash
-brew install --formula https://github.com/tsonubin/sub-maker/releases/latest/download/sub-maker.rb
-```
+1. Generates `sub-maker.rb` (version + SHA256s) into the release assets
+2. Publishes it to `tsonubin/homebrew-tap` via `scripts/publish-homebrew-tap.sh`
+
+Requires repo secret **`HOMEBREW_TAP_TOKEN`**: a classic PAT with `repo` scope (so Actions can push to the tap). Without it, the formula is still attached to the GitHub Release as `sub-maker.rb`.
 
 ## apt / dnf (direct packages)
 

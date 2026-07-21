@@ -31,7 +31,7 @@ package:
 	./scripts/package-linux.sh $(PKG_VERSION) .
 
 formula:
-	./scripts/generate-homebrew-formula.sh $(PKG_VERSION) .
+	./scripts/generate-homebrew-formula.sh $(PKG_VERSION) . dist/sub-maker.rb
 
 test:
 	$(CARGO) test

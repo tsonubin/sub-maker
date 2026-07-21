@@ -16,7 +16,7 @@ sudo sub-maker --setup
 **Homebrew (macOS or Linux — great for dev/demo):**
 
 ```bash
-brew tap tsonubin/sub-maker https://github.com/tsonubin/sub-maker
+brew tap tsonubin/tap
 brew install sub-maker
 ```
 

@@ -155,19 +155,12 @@ sub-maker --version
 
 ## 5. Homebrew (macOS + Linux)
 
-Uses prebuilt GitHub Release binaries (macOS and Linux bottles).
+Formulae live in the personal tap **[tsonubin/homebrew-tap](https://github.com/tsonubin/homebrew-tap)** (`brew tap tsonubin/tap`). Prebuilt release binaries for macOS and Linux.
 
 ```bash
-brew tap tsonubin/sub-maker https://github.com/tsonubin/sub-maker
+brew tap tsonubin/tap
 brew install sub-maker
 sub-maker --version
-```
-
-Or install the formula file from the latest release:
-
-```bash
-brew install --formula \
-  https://github.com/tsonubin/sub-maker/releases/latest/download/sub-maker.rb
 ```
 
 Upgrade:
@@ -175,6 +168,13 @@ Upgrade:
 ```bash
 brew update
 brew upgrade sub-maker
+```
+
+(Optional) install the formula file directly from a release asset:
+
+```bash
+brew install --formula \
+  https://github.com/tsonubin/sub-maker/releases/latest/download/sub-maker.rb
 ```
 
 On macOS, prefer demo mode — production paths and systemd are Linux-oriented:

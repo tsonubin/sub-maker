@@ -9,7 +9,7 @@
 #   sub-maker-darwin-amd64, sub-maker-darwin-arm64
 # from dist-dir (default: .)
 #
-# Default output: Formula/sub-maker.rb
+# Default output: dist/sub-maker.rb (for release assets + homebrew-tap publish)
 
 set -euo pipefail
 
@@ -17,7 +17,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VERSION="${1:?version required (e.g. 0.2.0 or v0.2.0)}"
 VERSION="${VERSION#v}"
 DIST="${2:-$ROOT}"
-OUT="${3:-$ROOT/Formula/sub-maker.rb}"
+OUT="${3:-$DIST/sub-maker.rb}"
 TMPL="$ROOT/packaging/homebrew/sub-maker.rb.tmpl"
 
 sha_of() {
