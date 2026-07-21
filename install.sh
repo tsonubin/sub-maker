@@ -157,31 +157,23 @@ fi
 
 if [ -z "$GOARCH" ]; then
   echo "==> Falling back to building from source..."
-  if ! command -v go >/dev/null 2>&1; then
-    echo "Go is not installed. Installing Go (this may take a minute)..."
-    GO_VERSION="1.23.0"
-    GO_DL_ARCH=$(uname -m)
-    case "$GO_DL_ARCH" in
-      x86_64) GO_DL_ARCH="amd64" ;;
-      aarch64|arm64) GO_DL_ARCH="arm64" ;;
-      *) echo "Unsupported architecture for Go: $GO_DL_ARCH"; exit 1 ;;
-    esac
-    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GO_DL_ARCH}.tar.gz" -o /tmp/go.tar.gz
-    rm -rf /usr/local/go
-    tar -C /usr/local -xzf /tmp/go.tar.gz
-    export PATH=$PATH:/usr/local/go/bin
-    echo 'export PATH=$PATH:/usr/local/go/bin' > /etc/profile.d/go.sh
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "Rust is not installed. Installing rustup (this may take a minute)..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    # shellcheck disable=SC1091
+    . "$HOME/.cargo/env" 2>/dev/null || true
+    export PATH="$HOME/.cargo/bin:$PATH"
   fi
 
   if ! command -v git >/dev/null 2>&1; then
     echo "git is not installed. Installing git..."
     if command -v apt-get >/dev/null 2>&1; then
       apt-get update -qq || true
-      apt-get install -y -qq git
+      apt-get install -y -qq git build-essential pkg-config
     elif command -v yum >/dev/null 2>&1; then
-      yum install -y git
+      yum install -y git gcc
     elif command -v apk >/dev/null 2>&1; then
-      apk add --no-cache git
+      apk add --no-cache git build-base
     else
       echo "Unable to install git automatically. Please install git and re-run."
       exit 1
@@ -192,9 +184,8 @@ if [ -z "$GOARCH" ]; then
   rm -rf /tmp/sub-maker-src
   git clone --depth 1 "https://github.com/${REPO}.git" /tmp/sub-maker-src
   cd /tmp/sub-maker-src
-  go mod tidy
-  VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
-  CGO_ENABLED=0 go build -ldflags "-X main.version=${VERSION} -s -w" -o "/tmp/${BINARY_NAME}" .
+  cargo build --release
+  cp "target/release/${BINARY_NAME}" "/tmp/${BINARY_NAME}"
 fi
 
 if [ -e "$TARGET_PATH" ]; then

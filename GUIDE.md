@@ -47,7 +47,7 @@ The default protocols are:
 - AnyTLS (modern flexible TLS obfuscation)
 - Shadowsocks 2022 (lightweight & fast)
 
-All run inside sing-box. The subscription endpoint (port 8964 by default) is powered by a small Go server that can leverage subconverter for even richer output.
+All run inside sing-box. The subscription endpoint (port 8964 by default) is powered by a small Rust server that can leverage subconverter for even richer output.
 
 ## Prerequisites
 
@@ -58,7 +58,7 @@ All run inside sing-box. The subscription endpoint (port 8964 by default) is pow
   - The setup performs privileged operations: installing binaries system-wide (`/usr/local/bin`, `/opt`), writing systemd units (`/etc/systemd/system`), configs (`/etc/sub-maker`), firewall rules, and certificate management.
   - **You do *not* need sudo privileges just to experiment or test**:
     - Run with `SUB_MAKER_DEMO=1 ./sub-maker --setup` (or set the env before running the binary). This uses user-writable `/tmp/sub-maker-demo-etc/...` paths for configs, installs sing-box to `~/.local/bin/sing-box` and subconverter to `~/.local/subconverter` (fully user-writable, no root at all), skips real `systemctl enable`.
-    - The `sub-maker` executable (the Go program providing the TUI and the subscription server) can be run as a regular user.
+    - The `sub-maker` executable (the Rust program providing the TUI and the subscription server) can be run as a regular user.
     - For the server: use env vars like `SUB_MAKER_NODES_FILE=/tmp/.../nodes.txt SUB_MAKER_PORT=8964 SUB_MAKER_TOKEN=xxx ./sub-maker --serve`.
   - If you see permission errors during `--setup` without sudo, that's expected for real mode — just re-run with `sudo`.
 - The VPS must be able to make outbound connections (to GitHub for downloads, Let's Encrypt / Cloudflare for certificates, etc.).
@@ -109,7 +109,7 @@ All run inside sing-box. The subscription endpoint (port 8964 by default) is pow
 
 ## Obtaining the Binary
 
-The easiest way is to use the provided `install.sh` script, which downloads a pre-built release binary (no Go required on the target server).
+The easiest way is to use the provided `install.sh` script, which downloads a pre-built release binary (no Rust toolchain required on the target server).
 
 ### Recommended: One-command install (pre-built from GitHub Releases)
 
@@ -145,13 +145,14 @@ Only needed if you want to modify the code or the releases are temporarily unava
 
 ```bash
 sudo apt update
-sudo apt install git golang-go -y   # or a newer Go from https://go.dev/dl
+sudo apt install git build-essential pkg-config curl -y
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
 
 git clone https://github.com/tsonubin/sub-maker.git
 cd sub-maker
-go mod tidy
-go build -o sub-maker .
-sudo mv sub-maker /usr/local/bin/
+cargo build --release
+sudo mv target/release/sub-maker /usr/local/bin/
 sudo chmod +x /usr/local/bin/sub-maker
 ```
 

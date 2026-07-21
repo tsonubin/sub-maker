@@ -40,7 +40,7 @@ See below for commands and GUIDE.md for full tutorial.
 - **You do *not* need sudo for testing/demo/CI**:
   - Use `SUB_MAKER_DEMO=1 ./sub-maker --setup` (or in TUI flows). This redirects configs to `/tmp/sub-maker-demo-etc/...` (user-writable), installs sing-box to `~/.local/bin/sing-box` and subconverter to `~/.local/subconverter` (fully user-writable, no root needed), skips real service enabling.
   - You can then run `./sub-maker --serve` as a regular user (using env vars like `SUB_MAKER_NODES_FILE=...` and `SUB_MAKER_PORT=...` to point to demo paths).
-  - The `sub-maker` Go binary itself (the TUI + server) does **not** require special privileges to *run* — only the *setup* in real (non-DEMO) mode does for system paths.
+  - The `sub-maker` Rust binary itself (the TUI + server) does **not** require special privileges to *run* — only the *setup* in real (non-DEMO) mode does for system paths.
 - Outbound internet access from the VPS (to download binaries, obtain certificates, etc.).
 - (Recommended) A domain name pointed at the VPS IP (for real TLS certificates via ACME). You can use a subdomain (e.g. `proxy.example.com`).
 - For Cloudflare DNS-01: a Cloudflare API token with DNS edit permissions for the zone.
@@ -103,7 +103,7 @@ The `install.sh` script now prefers downloading the pre-built binary matching yo
 curl -fsSL https://raw.githubusercontent.com/tsonubin/sub-maker/main/install.sh | sudo bash
 ```
 
-This will place `sub-maker` in `/usr/local/bin` without needing Go installed on the target machine (unless falling back).
+This will place `sub-maker` in `/usr/local/bin` without needing Rust installed on the target machine (unless falling back to a source build).
 
 The repository is public so that release binaries can be downloaded anonymously by `install.sh` (and `curl`) on any server without requiring `gh auth` or tokens. This is required for the "install on a fresh/random server" use case.
 
@@ -191,7 +191,7 @@ Example: `http://your-server:8964/raw?token=YOUR-TOKEN`
 
 - **sing-box** runs as the actual proxy server with multiple inbounds (one per enabled protocol).
 - **subconverter** (the fork) is prepared with your nodes.txt + a rich rules config (ACL4SSR_Online_Full by default). It can be used standalone on port 25500 if you want.
-- The Go **subscription server** (sub-maker) serves the Clash YAML on 8964. It reads `nodes.txt` and constructs (or can proxy to) the final config containing both your nodes and the common rulesets.
+- The **subscription server** (sub-maker, written in Rust) serves the Clash YAML on 8964. It reads `nodes.txt` and constructs (or can proxy to) the final config containing both your nodes and the common rulesets.
 - Configuration is stored in `/etc/sub-maker/config.yaml`.
 - Nodes (share links) are in `/etc/sub-maker/nodes.txt`.
 - sing-box config: `/etc/sing-box/config.json`.
@@ -213,8 +213,8 @@ Example: `http://your-server:8964/raw?token=YOUR-TOKEN`
 ```bash
 git clone https://github.com/tsonubin/sub-maker.git
 cd sub-maker
-go mod tidy
-go build -o sub-maker .
+cargo build --release
+cp target/release/sub-maker ./sub-maker
 ./sub-maker --help
 
 # Quick demo (no root, no real services)

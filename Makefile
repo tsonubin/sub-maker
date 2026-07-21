@@ -1,29 +1,30 @@
-# sub-maker Makefile (simple cross build + test)
-GO := go
+# sub-maker Makefile (Rust cross build + test)
+CARGO := cargo
 BINARY := sub-maker
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -ldflags "-X main.version=$(VERSION) -s -w"
+export CARGO_PKG_VERSION_OVERRIDE := $(VERSION)
 
-.PHONY: build test clean install demo
+.PHONY: build test clean install demo build-linux
 
 build:
-	$(GO) build $(LDFLAGS) -o $(BINARY) .
+	$(CARGO) build --release
+	cp target/release/$(BINARY) ./$(BINARY)
 
 build-linux:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BINARY)-linux-amd64 .
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build $(LDFLAGS) -o $(BINARY)-linux-arm64 .
+	$(CARGO) build --release --target x86_64-unknown-linux-gnu
+	$(CARGO) build --release --target aarch64-unknown-linux-gnu
+	cp target/x86_64-unknown-linux-gnu/release/$(BINARY) $(BINARY)-linux-amd64
+	cp target/aarch64-unknown-linux-gnu/release/$(BINARY) $(BINARY)-linux-arm64
 
 test:
-	$(GO) test ./internal/generator -v
-	$(GO) test ./... 2>/dev/null || true
+	$(CARGO) test
 
 demo:
-	SUB_MAKER_DEMO=1 $(GO) run . --setup
+	SUB_MAKER_DEMO=1 $(CARGO) run -- --setup
 
 clean:
+	$(CARGO) clean
 	rm -f $(BINARY) $(BINARY)-*
 
 install: build
 	install -m 755 $(BINARY) /usr/local/bin/$(BINARY)
-
-# Example: make build-linux ; ls -l *linux*

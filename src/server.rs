@@ -1,0 +1,390 @@
+use base64::{
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+    Engine as _,
+};
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tracing::info;
+use url::Url;
+
+use crate::config;
+
+pub fn run() -> anyhow::Result<()> {
+    let port = std::env::var("SUB_MAKER_PORT").unwrap_or_else(|_| "8964".into());
+    let token = std::env::var("SUB_MAKER_TOKEN").unwrap_or_else(|_| "changeme-in-config".into());
+    let nodes_path = std::env::var("SUB_MAKER_NODES_FILE").unwrap_or_else(|_| {
+        PathBuf::from(config::etc_base())
+            .join("sub-maker")
+            .join("nodes.txt")
+            .to_string_lossy()
+            .into()
+    });
+
+    let state = Arc::new(ServerState {
+        token,
+        nodes_path,
+        port: port.clone(),
+    });
+
+    let addr = format!("0.0.0.0:{port}");
+    let listener = TcpListener::bind(&addr)?;
+    info!(
+        addr = %addr,
+        nodes = %state.nodes_path,
+        "starting sub-maker subscription server"
+    );
+
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "accept failed");
+                continue;
+            }
+        };
+        let state = Arc::clone(&state);
+        if let Err(e) = handle_connection(&mut stream, &state) {
+            tracing::debug!(error = %e, "request handling error");
+        }
+    }
+    Ok(())
+}
+
+struct ServerState {
+    token: String,
+    nodes_path: String,
+    port: String,
+}
+
+fn handle_connection(stream: &mut (impl Read + Write), state: &ServerState) -> anyhow::Result<()> {
+    let mut buf = [0u8; 8192];
+    let n = stream.read(&mut buf)?;
+    if n == 0 {
+        return Ok(());
+    }
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let mut lines = req.lines();
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.split_whitespace();
+    let _method = parts.next().unwrap_or("GET");
+    let path_and_query = parts.next().unwrap_or("/");
+
+    let url = Url::parse(&format!("http://localhost{path_and_query}"))
+        .unwrap_or_else(|_| Url::parse("http://localhost/").unwrap());
+    let path = url.path().to_string();
+    let query_token = url
+        .query_pairs()
+        .find(|(k, _)| k == "token")
+        .map(|(_, v)| v.to_string());
+
+    match path.as_str() {
+        "/" => {
+            let body = format!(
+                "sub-maker on {}\nGET /sub?token=XXX  (Clash subscription with common rulesets)\nNodes source: {}\nAlso: /raw  (original node URIs)\n",
+                state.port, state.nodes_path
+            );
+            write_response(stream, 200, "text/plain; charset=utf-8", &body, &[])?;
+        }
+        "/raw" => {
+            if query_token.as_deref() != Some(state.token.as_str()) {
+                write_response(stream, 401, "text/plain", "unauthorized\n", &[])?;
+                return Ok(());
+            }
+            let nodes = load_nodes(&state.nodes_path);
+            if nodes.is_empty() {
+                write_response(stream, 503, "text/plain", "no nodes configured\n", &[])?;
+                return Ok(());
+            }
+            let body = format!("{}\n", nodes.join("\n"));
+            write_response(stream, 200, "text/plain", &body, &[])?;
+        }
+        "/sub" => {
+            if query_token.as_deref() != Some(state.token.as_str()) {
+                write_response(stream, 401, "text/plain", "unauthorized\n", &[])?;
+                return Ok(());
+            }
+            let nodes = load_nodes(&state.nodes_path);
+            if nodes.is_empty() {
+                write_response(stream, 503, "text/plain", "no nodes configured\n", &[])?;
+                return Ok(());
+            }
+            let (proxies_yaml, proxy_names) = nodes_to_clash_proxies_with_names(&nodes);
+            let group_proxies = if proxy_names.is_empty() {
+                "DIRECT".to_string()
+            } else {
+                proxy_names.join("\n      - ")
+            };
+            let body = format!(
+                r#"mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+external-controller: 127.0.0.1:9090
+
+dns:
+  enable: true
+  nameserver:
+    - 223.5.5.5
+
+proxies:
+{proxies_yaml}
+proxy-groups:
+  - name: "🔰 节点选择"
+    type: select
+    proxies:
+      - {group_proxies}
+      - DIRECT
+  - name: "🎯 全球直连"
+    type: select
+    proxies:
+      - DIRECT
+      - "🔰 节点选择"
+
+rules:
+  # Common rulesets (via subconverter + ACL4SSR in full setups)
+  - DOMAIN-SUFFIX,local,🎯 全球直连
+  - GEOIP,CN,🎯 全球直连
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/LocalAreaNetwork.list,🎯 全球直连
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Google.list,🔰 节点选择
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Netflix.list,🔰 节点选择
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/YouTube.list,🔰 节点选择
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/Telegram.list,🔰 节点选择
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/OpenAI.list,🔰 节点选择
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/BanAD.list,REJECT
+  - RULE-SET,https://raw.githubusercontent.com/ACL4SSR/ACL4SSR/master/Clash/ChinaDomain.list,🎯 全球直连
+  - MATCH,🔰 节点选择
+"#
+            );
+            write_response(
+                stream,
+                200,
+                "text/yaml; charset=utf-8",
+                &body,
+                &[
+                    ("Profile-Update-Interval", "6"),
+                    (
+                        "Subscription-Userinfo",
+                        "upload=0; download=0; total=0; expire=0",
+                    ),
+                ],
+            )?;
+        }
+        _ => write_response(stream, 404, "text/plain", "not found\n", &[])?,
+    }
+    Ok(())
+}
+
+fn write_response(
+    stream: &mut impl Write,
+    status: u16,
+    content_type: &str,
+    body: &str,
+    extra_headers: &[(&str, &str)],
+) -> anyhow::Result<()> {
+    // Note: Write alone is fine without parentheses.
+    let reason = match status {
+        200 => "OK",
+        401 => "Unauthorized",
+        404 => "Not Found",
+        503 => "Service Unavailable",
+        _ => "OK",
+    };
+    let mut headers = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    for (k, v) in extra_headers {
+        headers.push_str(&format!("{k}: {v}\r\n"));
+    }
+    headers.push_str("\r\n");
+    stream.write_all(headers.as_bytes())?;
+    stream.write_all(body.as_bytes())?;
+    stream.flush()?;
+    Ok(())
+}
+
+pub fn load_nodes(path: &str) -> Vec<String> {
+    match std::fs::read_to_string(path) {
+        Ok(data) => {
+            let out: Vec<String> = data
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                .map(|s| s.to_string())
+                .collect();
+            if out.is_empty() && config::demo_mode() {
+                return demo_nodes();
+            }
+            out
+        }
+        Err(_) => {
+            if config::demo_mode() {
+                demo_nodes()
+            } else {
+                vec![]
+            }
+        }
+    }
+}
+
+fn demo_nodes() -> Vec<String> {
+    vec![
+        "hysteria2://demo-pass@127.0.0.1:8443/?sni=example.com#Hy2".into(),
+        "vless://demo-uuid@127.0.0.1:443?security=reality&fp=chrome&sni=www.apple.com&sid=0123abc&pbk=demo-pbk#Reality".into(),
+    ]
+}
+
+pub fn nodes_to_clash_proxies_with_names(nodes: &[String]) -> (String, Vec<String>) {
+    let mut buf = String::new();
+    let mut names = Vec::new();
+    for n in nodes {
+        let Ok(u) = Url::parse(n) else {
+            continue;
+        };
+        let scheme = u.scheme();
+        let host = u.host_str().unwrap_or("");
+        let port = u.port().map(|p| p.to_string()).unwrap_or_else(|| "443".into());
+        let remark = {
+            let frag = u.fragment().unwrap_or("");
+            if frag.is_empty() {
+                scheme.to_string()
+            } else {
+                frag.to_string()
+            }
+        };
+        let username = u.username();
+        let password = u.password().unwrap_or("");
+        let query = |key: &str| -> String {
+            u.query_pairs()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.to_string())
+                .unwrap_or_default()
+        };
+
+        let line = match scheme {
+            "hysteria2" => format!(
+                "  - {{name: \"{remark}\", type: hysteria2, server: {host}, port: {port}, password: \"{username}\", sni: \"{}\", alpn: [h3], udp: true, skip-cert-verify: false}}\n",
+                query("sni")
+            ),
+            "vless" => {
+                let sec = query("security");
+                if sec == "reality" {
+                    format!(
+                        "  - {{name: \"{remark}\", type: vless, server: {host}, port: {port}, uuid: \"{username}\", network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: \"{}\", packet-encoding: xudp, reality-opts: {{public-key: \"{}\", short-id: \"{}\"}}, client-fingerprint: chrome}}\n",
+                        query("sni"),
+                        query("pbk"),
+                        query("sid")
+                    )
+                } else {
+                    format!(
+                        "  - {{name: \"{remark}\", type: vless, server: {host}, port: {port}, uuid: \"{username}\", tls: true, udp: true}}\n"
+                    )
+                }
+            }
+            "tuic" => {
+                let (uuid, pass) = if password.is_empty() {
+                    // user may be "uuid:pass" if password not split by Url parser
+                    let parts: Vec<&str> = username.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        (parts[0].to_string(), parts[1].to_string())
+                    } else {
+                        (username.to_string(), String::new())
+                    }
+                } else {
+                    (username.to_string(), password.to_string())
+                };
+                format!(
+                    "  - {{name: \"{remark}\", type: tuic, server: {host}, port: {port}, uuid: \"{uuid}\", password: \"{pass}\", sni: \"{}\", alpn: [h3], udp: true, udp-relay-mode: native, congestion-controller: bbr}}\n",
+                    query("sni")
+                )
+            }
+            "anytls" => format!(
+                "  - {{name: \"{remark}\", type: anytls, server: {host}, port: {port}, password: \"{username}\", sni: \"{}\", client-fingerprint: chrome, udp: true, alpn: [h2, http/1.1]}}\n",
+                query("sni")
+            ),
+            "ss" => {
+                let (cipher, password) = decode_ss_user_info(username);
+                format!(
+                    "  - {{name: \"{remark}\", type: ss, server: {host}, port: {port}, cipher: \"{cipher}\", password: \"{password}\", udp: true}}\n"
+                )
+            }
+            _ => format!(
+                "  - {{name: \"{remark}\", type: ss, server: {host}, port: {port}, cipher: \"aes-128-gcm\", password: \"demo\"}}\n"
+            ),
+        };
+        if !line.is_empty() {
+            buf.push_str(&line);
+            names.push(remark);
+        }
+    }
+    (buf, names)
+}
+
+fn decode_ss_user_info(encoded: &str) -> (String, String) {
+    for engine in [URL_SAFE_NO_PAD, URL_SAFE, STANDARD_NO_PAD, STANDARD] {
+        if let Ok(decoded) = engine.decode(encoded) {
+            if let Ok(s) = String::from_utf8(decoded) {
+                if let Some((cipher, password)) = s.split_once(':') {
+                    if !cipher.is_empty() {
+                        return (cipher.to_string(), password.to_string());
+                    }
+                }
+            }
+        }
+    }
+    ("2022-blake3-aes-128-gcm".into(), encoded.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nodes_to_clash_proxies_uses_protocol_accurate_fields() {
+        let nodes = vec![
+            "vless://uuid@1.2.3.4:443?security=reality&flow=xtls-rprx-vision&fp=chrome&sni=www.apple.com&sid=0123abcd&pbk=pubkey#Reality".into(),
+            "hysteria2://hy-pass@1.2.3.4:8443/?sni=example.com#Hy2".into(),
+            "tuic://tuic-uuid:tuic-pass@1.2.3.4:9443/?sni=example.com&alpn=h3#TUIC".into(),
+            "anytls://any-pass@1.2.3.4:7443?security=tls&sni=example.com#AnyTLS".into(),
+            "ss://MjAyMi1ibGFrZTMtYWVzLTEyOC1nY206MDEyMzQ1Njc4OWFiY2RlZg@1.2.3.4:8388#SS2022".into(),
+        ];
+        let (yaml, names) = nodes_to_clash_proxies_with_names(&nodes);
+        assert_eq!(names.len(), nodes.len());
+        for check in [
+            "type: vless",
+            "flow: xtls-rprx-vision",
+            "packet-encoding: xudp",
+            "servername: \"www.apple.com\"",
+            "type: hysteria2",
+            "alpn: [h3]",
+            "type: tuic",
+            "udp-relay-mode: native",
+            "congestion-controller: bbr",
+            "type: anytls",
+            "cipher: \"2022-blake3-aes-128-gcm\"",
+            "password: \"0123456789abcdef\"",
+            "udp: true",
+        ] {
+            assert!(yaml.contains(check), "expected YAML to contain {check:?}:\n{yaml}");
+        }
+        assert!(!yaml.contains("type: trojan"));
+    }
+
+    #[test]
+    fn load_nodes_demo_mode_and_normal_paths() {
+        // Serialize env mutations — parallel tests share process env.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        std::env::remove_var("SUB_MAKER_DEMO");
+        let nodes = load_nodes("/path/that/does/not/exist/nodes.txt");
+        assert!(nodes.is_empty());
+
+        std::env::set_var("SUB_MAKER_DEMO", "1");
+        let nodes = load_nodes("/path/that/does/not/exist/nodes.txt");
+        assert!(!nodes.is_empty());
+        std::env::remove_var("SUB_MAKER_DEMO");
+    }
+}
