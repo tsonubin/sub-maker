@@ -297,25 +297,19 @@ pub fn ensure_runtime_credentials(cfg: &mut SetupConfig) -> anyhow::Result<()> {
 
 fn random_secret() -> String {
     let mut b = [0u8; 18];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return Uuid::new_v4().to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     URL_SAFE_NO_PAD.encode(b)
 }
 
 fn random_ss2022_secret() -> String {
     let mut b = [0u8; 16];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return random_secret();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     STANDARD.encode(b)
 }
 
 fn random_hex(size: usize) -> String {
     let mut b = vec![0u8; size];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return Uuid::new_v4().simple().to_string()[..size * 2].to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     hex::encode(b)
 }
 

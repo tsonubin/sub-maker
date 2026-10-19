@@ -13,7 +13,6 @@ use base64::{
     Engine as _,
 };
 use rand::RngCore;
-use uuid::Uuid;
 
 pub(crate) fn random_token() -> String {
     let secret = random_secret();
@@ -23,25 +22,19 @@ pub(crate) fn random_token() -> String {
 
 pub(crate) fn random_secret() -> String {
     let mut b = [0u8; 18];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return Uuid::new_v4().to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     URL_SAFE_NO_PAD.encode(b)
 }
 
 pub(crate) fn random_ss2022_secret() -> String {
     let mut b = [0u8; 16];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return random_secret();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     STANDARD.encode(b)
 }
 
 pub(crate) fn random_hex(size: usize) -> String {
     let mut b = vec![0u8; size];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return "01234567".to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     hex::encode(b)
 }
 

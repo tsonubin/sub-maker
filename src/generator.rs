@@ -21,26 +21,19 @@ pub struct Node {
 
 fn random_short_id() -> String {
     let mut b = [0u8; 4];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return Uuid::new_v4().simple().to_string()[..8].to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     hex::encode(b)
 }
 
 fn random_pass() -> String {
     let mut b = [0u8; 16];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return Uuid::new_v4().to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     URL_SAFE_NO_PAD.encode(b)
 }
 
 fn random_ss2022_pass() -> String {
     let mut b = [0u8; 16];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        let s = Uuid::new_v4().to_string();
-        return STANDARD.encode(&s.as_bytes()[..16]);
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     STANDARD.encode(b)
 }
 

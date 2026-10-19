@@ -271,9 +271,7 @@ pub fn validate_sub_token(token: &str) -> anyhow::Result<()> {
 pub fn generate_link_passcode() -> String {
     const ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
     let mut b = [0u8; 10];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return "change-me".to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     b.iter()
         .map(|v| ALPHABET[(*v as usize) % ALPHABET.len()] as char)
         .collect()
