@@ -147,7 +147,7 @@ pub fn copy_certs_to_etc(domain: &str) -> anyhow::Result<()> {
     if !src.exists() {
         src = PathBuf::from(acme_home()).join(domain);
     }
-    let dst = PathBuf::from("/etc/sub-maker/certs");
+    let dst = certs_dst_dir();
     fs::create_dir_all(&dst)?;
     copy_file(
         &src.join("fullchain.cer"),
@@ -165,7 +165,7 @@ pub fn copy_certs_to_etc(domain: &str) -> anyhow::Result<()> {
 
 pub fn copy_certbot_certs_to_etc(domain: &str) -> anyhow::Result<()> {
     let src = PathBuf::from("/etc/letsencrypt/live").join(domain);
-    let dst = PathBuf::from("/etc/sub-maker/certs");
+    let dst = certs_dst_dir();
     fs::create_dir_all(&dst)?;
     copy_file(
         &src.join("fullchain.pem"),

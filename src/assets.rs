@@ -14,6 +14,12 @@ pub fn template(name: &str) -> Option<&'static str> {
         "sub-maker-sub.service.tpl" => {
             Some(include_str!("../templates/sub-maker-sub.service.tpl"))
         }
+        "sub-maker-renew.service.tpl" => {
+            Some(include_str!("../templates/sub-maker-renew.service.tpl"))
+        }
+        "sub-maker-renew.timer.tpl" => {
+            Some(include_str!("../templates/sub-maker-renew.timer.tpl"))
+        }
         "subconverter.service.tpl" => Some(include_str!("../templates/subconverter.service.tpl")),
         "subconverter_pref.ini.tpl" => {
             Some(include_str!("../templates/subconverter_pref.ini.tpl"))

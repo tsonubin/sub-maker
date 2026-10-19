@@ -367,7 +367,7 @@ fn extract_key_line(output: &str, pattern: &str) -> String {
 
 fn start_and_verify_services(cfg: &SetupConfig) -> anyhow::Result<()> {
     diagnostics::run_systemctl(&["daemon-reload"])?;
-    let mut services = vec!["sing-box", "sub-maker-sub"];
+    let mut services = vec!["sing-box", "sub-maker-sub", "sub-maker-renew.timer"];
     if subconverter_installed() {
         services.push("subconverter");
     }
@@ -557,6 +557,8 @@ pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Resu
         "sing-box.service",
         "subconverter.service",
         "sub-maker-sub.service",
+        "sub-maker-renew.service",
+        "sub-maker-renew.timer",
     ];
     for name in unit_names {
         let content = read_template(&format!("templates/{name}.tpl"))?;

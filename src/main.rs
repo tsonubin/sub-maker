@@ -38,6 +38,10 @@ struct Cli {
     #[arg(long)]
     update: bool,
 
+    /// Refresh managed certificates and restart sing-box if they changed
+    #[arg(long)]
+    renew: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -56,6 +60,8 @@ enum Commands {
     Nodes,
     /// Update sing-box and subconverter binaries
     Update,
+    /// Refresh managed certificates and restart sing-box if they changed
+    Renew,
     /// Print subscription and raw node links
     Links,
     /// Print subscription URL after passcode verification
@@ -108,6 +114,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     if cli.update {
         return run_update();
     }
+    if cli.renew {
+        return run_renew();
+    }
 
     match cli.command {
         Some(Commands::Setup) => run_setup(),
@@ -115,6 +124,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Commands::Serve) => server::run(),
         Some(Commands::Nodes) => print_nodes(),
         Some(Commands::Update) => run_update(),
+        Some(Commands::Renew) => run_renew(),
         Some(Commands::Links) => cli::print_links(),
         Some(Commands::Link {
             passcode,
@@ -175,5 +185,25 @@ fn run_update() -> anyhow::Result<()> {
     info!("updating subconverter...");
     setup::download_subconverter("")?;
     println!("Binaries updated. Restart services with: sudo sub-maker restart");
+    Ok(())
+}
+
+fn run_renew() -> anyhow::Result<()> {
+    let cfg = cli::load_config().map_err(|e| {
+        anyhow::anyhow!(
+            "load config failed; run setup first ({}): {e}",
+            cli::config_path().display()
+        )
+    })?;
+    let changed = setup::refresh_managed_certs(&cfg)?;
+    if changed {
+        println!("managed certificate refreshed");
+        if !config::demo_mode() {
+            diagnostics::run_systemctl(&["restart", "sing-box"])?;
+            println!("sing-box restarted");
+        }
+    } else {
+        println!("managed certificate unchanged; nothing to restart");
+    }
     Ok(())
 }

@@ -334,7 +334,7 @@ Import them individually in clients that support the URI scheme.
 - **Health checks**: Run `sudo sub-maker doctor`.
 - **SSH link retrieval**: Run `sudo sub-maker link` and enter the setup passcode.
 - **Viewing links**: Run `sudo sub-maker links`.
-- **Renewing certificates**: Certbot usually installs a timer; acme.sh usually installs a cron job. Note that sing-box serves the managed copies under `/etc/sub-maker/certs/`, which sub-maker does not refresh automatically: after the ACME client renews, re-run `sudo sub-maker config` (or `--setup`) to re-copy the certificates, then `sudo sub-maker restart`. Without this, the served certificate goes stale after ~90 days.
+- **Renewing certificates**: Certbot usually installs a timer; acme.sh usually installs a cron job. sub-maker then refreshes the managed copies under `/etc/sub-maker/certs/` via `sudo sub-maker renew`, which a weekly `sub-maker-renew.timer` runs automatically; it restarts sing-box only when the certificate changed. Self-signed certs are regenerated when they expire within 14 days. Run it manually after a manual ACME renewal.
 - **Viewing current nodes**: `sudo sub-maker nodes` or `curl 'http://127.0.0.1:8964/raw?token=...'`.
 - **Updating binaries**: `sudo sub-maker --update` refreshes the sing-box and subconverter binaries (then `sudo sub-maker restart`). You can also manually download newer releases and replace the files in `/usr/local/bin` and `/opt/subconverter`.
 - **Backup**: The important files are under `/etc/sub-maker/` (especially `config.yaml` and `nodes.txt`) and your sing-box config. Back them up before major changes.

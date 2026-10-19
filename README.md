@@ -100,6 +100,7 @@ sudo sub-maker config
 | `links` | Subscription, raw, and IP fallback URLs |
 | `doctor` | Config, DNS, certs, services, local `/sub` |
 | `status` / `start` / `stop` / `restart` | Managed systemd units |
+| `renew` / `--renew` | Re-copy/validate managed certs; restart sing-box if changed (weekly timer) |
 | `--update` | Refresh sing-box + subconverter binaries |
 | `--version` | Print version |
 
@@ -144,7 +145,7 @@ GitHub Actions builds on tags (`v*`) and attaches:
 | **config** | `/etc/sub-maker/config.yaml` |
 | **nodes** | `/etc/sub-maker/nodes.txt` |
 | **sing-box config** | `/etc/sing-box/config.json` |
-| **units** | `sing-box`, `subconverter`, `sub-maker-sub` under `/etc/systemd/system/` |
+| **units** | `sing-box`, `subconverter`, `sub-maker-sub`, `sub-maker-renew.timer` under `/etc/systemd/system/` |
 
 ## Updating
 
