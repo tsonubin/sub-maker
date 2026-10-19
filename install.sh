@@ -17,6 +17,14 @@ REPO="tsonubin/sub-maker"
 TARGET_PATH="${INSTALL_DIR}/${BINARY_NAME}"
 SUB_MAKER_SERVICE="sub-maker-sub"
 
+# Private scratch dir for downloads/staging (no predictable /tmp names).
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+BIN_PATH="${WORK}/${BINARY_NAME}"
+# Set SUB_MAKER_INSTALL_INSECURE=1 to install despite missing/mismatching
+# release checksums. The default is fail-closed.
+INSECURE="${SUB_MAKER_INSTALL_INSECURE:-0}"
+
 echo "==> sub-maker installer"
 echo "This will download the latest sub-maker binary and place it in ${INSTALL_DIR}."
 
@@ -128,26 +136,39 @@ esac
 if [ -n "$GOARCH" ]; then
   BIN_URL="https://github.com/${REPO}/releases/latest/download/sub-maker-linux-${GOARCH}"
   echo "==> Attempting to download pre-built binary for linux-${GOARCH} from GitHub Releases..."
-  if curl -fL "$BIN_URL" -o "/tmp/${BINARY_NAME}"; then
+  if curl -fL "$BIN_URL" -o "$BIN_PATH"; then
     echo "Downloaded pre-built binary."
 
-    # Best-effort checksum verification (non-fatal)
+    # Checksum verification: fail closed unless explicitly overridden.
     CHECKSUM_URL="https://github.com/${REPO}/releases/latest/download/checksums.txt"
-    if curl -fsL "$CHECKSUM_URL" -o /tmp/checksums.txt 2>/dev/null; then
-      expected=$(grep "sub-maker-linux-${GOARCH}" /tmp/checksums.txt 2>/dev/null | awk '{print $1}' | head -1 || true)
+    if curl -fsL "$CHECKSUM_URL" -o "${WORK}/checksums.txt" 2>/dev/null; then
+      expected=$(grep "sub-maker-linux-${GOARCH}" "${WORK}/checksums.txt" 2>/dev/null | awk '{print $1}' | head -1 || true)
       if [ -n "$expected" ]; then
-        actual=$(sha256sum "/tmp/${BINARY_NAME}" | awk '{print $1}')
+        actual=$(sha256sum "$BIN_PATH" | awk '{print $1}')
         if [ "$expected" = "$actual" ]; then
           echo "Checksum verified OK."
+        elif [ "$INSECURE" = "1" ]; then
+          echo "WARNING: Checksum mismatch (expected $expected, got $actual)."
+          echo "SUB_MAKER_INSTALL_INSECURE=1 set; installing anyway."
         else
-          echo "WARNING: Checksum mismatch (expected $expected, got $actual). The binary may be corrupted or the release is in progress."
-          echo "You can verify manually later with: sha256sum /usr/local/bin/sub-maker"
+          echo "ERROR: checksum mismatch (expected $expected, got $actual)."
+          echo "The binary does not match the published release; refusing to install."
+          echo "Retry later, or set SUB_MAKER_INSTALL_INSECURE=1 to override (not recommended)."
+          exit 1
         fi
+      elif [ "$INSECURE" = "1" ]; then
+        echo "WARNING: no checksum entry for this arch; SUB_MAKER_INSTALL_INSECURE=1 set; installing anyway."
       else
-        echo "Note: No matching checksum entry found for this arch (proceeding anyway)."
+        echo "ERROR: no checksum entry for sub-maker-linux-${GOARCH} in checksums.txt."
+        echo "Set SUB_MAKER_INSTALL_INSECURE=1 to override (not recommended)."
+        exit 1
       fi
+    elif [ "$INSECURE" = "1" ]; then
+      echo "WARNING: could not fetch checksums.txt; SUB_MAKER_INSTALL_INSECURE=1 set; installing anyway."
     else
-      echo "Note: Could not fetch checksums.txt (proceeding without verification)."
+      echo "ERROR: could not fetch checksums.txt; refusing to install unverified binary."
+      echo "Set SUB_MAKER_INSTALL_INSECURE=1 to override (not recommended)."
+      exit 1
     fi
   else
     echo "Download failed (no matching release asset or network issue)."
@@ -181,11 +202,10 @@ if [ -z "$GOARCH" ]; then
   fi
 
   echo "Cloning repository and building..."
-  rm -rf /tmp/sub-maker-src
-  git clone --depth 1 "https://github.com/${REPO}.git" /tmp/sub-maker-src
-  cd /tmp/sub-maker-src
+  git clone --depth 1 "https://github.com/${REPO}.git" "${WORK}/src"
+  cd "${WORK}/src"
   cargo build --release
-  cp "target/release/${BINARY_NAME}" "/tmp/${BINARY_NAME}"
+  cp "target/release/${BINARY_NAME}" "$BIN_PATH"
 fi
 
 if [ -e "$TARGET_PATH" ]; then
@@ -199,7 +219,7 @@ fi
 echo "==> Installing to ${TARGET_PATH}"
 $SUDO mkdir -p "$INSTALL_DIR"
 tmp_target=$($SUDO mktemp "${INSTALL_DIR}/.${BINARY_NAME}.XXXXXX")
-$SUDO install -m 0755 "/tmp/${BINARY_NAME}" "$tmp_target"
+$SUDO install -m 0755 "$BIN_PATH" "$tmp_target"
 $SUDO mv -f "$tmp_target" "$TARGET_PATH"
 
 if [ "${RESTART_SUB_MAKER_SERVICE:-}" = "1" ]; then
