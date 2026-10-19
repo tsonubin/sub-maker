@@ -95,6 +95,10 @@ fn main() {
 
     let result = run(cli);
     if let Err(err) = result {
+        if err.downcast_ref::<tui::UserCancelled>().is_some() {
+            eprintln!("aborted");
+            std::process::exit(130);
+        }
         error!(error = %err, "command failed");
         std::process::exit(1);
     }

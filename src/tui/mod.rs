@@ -5,6 +5,7 @@ mod widgets;
 mod wizard;
 
 pub use config::run_config_wizard;
+pub use terminal::UserCancelled;
 pub use wizard::run_wizard;
 
 use base64::{

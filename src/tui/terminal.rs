@@ -51,7 +51,17 @@ pub fn next_key(timeout: Duration) -> anyhow::Result<Option<KeyEvent>> {
 }
 
 pub fn cancel_err() -> anyhow::Error {
-    anyhow::anyhow!("cancelled by user")
+    anyhow::Error::new(UserCancelled)
+}
+
+/// Marker for a deliberate wizard abort (Esc / Ctrl-C / q): not a failure.
+#[derive(Debug)]
+pub struct UserCancelled;
+
+impl std::fmt::Display for UserCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("cancelled")
+    }
 }
 
 #[allow(dead_code)]
@@ -59,3 +69,5 @@ pub fn restore_for_error() {
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen);
 }
+impl std::error::Error for UserCancelled {}
+
