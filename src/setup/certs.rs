@@ -26,23 +26,31 @@ pub fn ensure_acme(
     if !email.is_empty() {
         validate_email(email)?;
     }
-    if which::which("acme.sh").is_err() {
-        info!("installing acme.sh ...");
-        // Email is passed as a positional shell parameter; never interpolate
-        // user input into the command string.
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(r#"curl -fsSL https://get.acme.sh | sh -s -- email="$1""#)
-            .arg("sub-maker-acme-install")
-            .arg(email)
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("acme install failed");
-        }
+    if mode == CertStrategy::AcmeDnsCf && cf_token.is_empty() {
+        anyhow::bail!(
+            "Cloudflare API token required for acme-dns-cf; re-run setup and provide one \
+             (DNS edit scope), or choose another certificate strategy"
+        );
     }
-
-    let acme = PathBuf::from(acme_home()).join("acme.sh");
-    if mode == CertStrategy::AcmeDnsCf && !cf_token.is_empty() {
+    let acme = match acme_bin() {
+        Ok(bin) => bin,
+        Err(_) => {
+            info!("installing acme.sh ...");
+            // Email is passed as a positional shell parameter; never interpolate
+            // user input into the command string.
+            let status = Command::new("sh")
+                .arg("-c")
+                .arg(r#"curl -fsSL https://get.acme.sh | sh -s -- email="$1""#)
+                .arg("sub-maker-acme-install")
+                .arg(email)
+                .status()?;
+            if !status.success() {
+                anyhow::bail!("acme install failed");
+            }
+            PathBuf::from(acme_home()).join("acme.sh")
+        }
+    };
+    if mode == CertStrategy::AcmeDnsCf {
         let output = Command::new(&acme)
             .args([
                 "--issue",
@@ -235,6 +243,15 @@ fn command_exists(name: &str) -> bool {
     which::which(name).is_ok()
 }
 
+/// Prefers the acme.sh installed under `~/.acme.sh`, then one on PATH.
+fn acme_bin() -> anyhow::Result<PathBuf> {
+    let home = PathBuf::from(acme_home()).join("acme.sh");
+    if home.is_file() {
+        return Ok(home);
+    }
+    which::which("acme.sh").map_err(|_| anyhow::anyhow!("acme.sh not found"))
+}
+
 /// Accepts ordinary contact emails only; rejects anything that could not
 /// appear in an ACME registration anyway (and that would be hostile in logs).
 pub fn validate_email(email: &str) -> anyhow::Result<()> {
@@ -265,7 +282,15 @@ fn acme_home() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_email;
+    use super::{ensure_acme, validate_email};
+    use crate::config::CertStrategy;
+
+    #[test]
+    fn ensure_acme_requires_cf_token_for_dns01() {
+        let err = ensure_acme("proxy.example.com", "ops@example.com", CertStrategy::AcmeDnsCf, "")
+            .expect_err("empty CF token must not fall back to HTTP-01");
+        assert!(err.to_string().contains("Cloudflare API token"));
+    }
 
     #[test]
     fn validate_email_accepts_plain_addresses_and_rejects_shell_syntax() {
