@@ -31,7 +31,7 @@ pub fn download_file(url: &str, dest: &Path) -> anyhow::Result<()> {
     }
 
     let tmp_dest = dest.with_extension("tmp");
-    let mut out = File::create(&tmp_dest)?;
+    let mut out = create_new_file(&tmp_dest)?;
     let limit = max_download_bytes();
     let mut limited = resp.by_ref().take(limit + 1);
     let written = io::copy(&mut limited, &mut out)?;
@@ -44,6 +44,50 @@ pub fn download_file(url: &str, dest: &Path) -> anyhow::Result<()> {
     }
     fs::rename(&tmp_dest, dest)?;
     Ok(())
+}
+
+/// Opens a fresh regular file, refusing to follow a pre-planted symlink.
+fn create_new_file(path: &Path) -> io::Result<File> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    match opts.open(path) {
+        Ok(f) => Ok(f),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            // Unlink the stale entry (symlink or not) and retry once.
+            fs::remove_file(path)?;
+            opts.open(path)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Private scratch directory under the system temp dir: unpredictable name,
+/// 0700, created atomically (fails if the name exists — no symlink following).
+fn create_private_workdir(tag: &str) -> anyhow::Result<PathBuf> {
+    use rand::RngCore;
+    let base = std::env::temp_dir();
+    for _ in 0..4 {
+        let mut b = [0u8; 6];
+        rand::thread_rng().fill_bytes(&mut b);
+        let dir = base.join(format!(
+            "sub-maker-{tag}-{}-{}",
+            std::process::id(),
+            hex::encode(b)
+        ));
+        match fs::create_dir(&dir) {
+            Ok(()) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+                }
+                return Ok(dir);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    anyhow::bail!("could not create a private temp workdir")
 }
 
 pub fn extract_tar_gz(src: &Path, dest: &Path) -> anyhow::Result<()> {
@@ -121,10 +165,16 @@ pub fn download_sing_box(version: &str) -> anyhow::Result<()> {
     let url = format!(
         "https://github.com/SagerNet/sing-box/releases/download/{version}/sing-box-{ver_trim}-linux-{arch}.tar.gz"
     );
-    let tmp = PathBuf::from("/tmp/sing-box.tar.gz");
-    download_file(&url, &tmp).map_err(|e| anyhow::anyhow!("download sing-box: {e}"))?;
-    let extract_dir = PathBuf::from("/tmp/sing-box-extract");
-    let _ = fs::remove_dir_all(&extract_dir);
+    let work = create_private_workdir("sing-box")?;
+    let result = download_sing_box_into(&work, &url);
+    let _ = fs::remove_dir_all(&work);
+    result
+}
+
+fn download_sing_box_into(work: &Path, url: &str) -> anyhow::Result<()> {
+    let tmp = work.join("sing-box.tar.gz");
+    download_file(url, &tmp).map_err(|e| anyhow::anyhow!("download sing-box: {e}"))?;
+    let extract_dir = work.join("extract");
     fs::create_dir_all(&extract_dir)?;
     extract_tar_gz(&tmp, &extract_dir)?;
 
@@ -169,8 +219,15 @@ pub fn download_subconverter(version: &str) -> anyhow::Result<()> {
     let url = format!(
         "https://github.com/asdlokj1qpi233/subconverter/releases/download/{version}/{asset}"
     );
-    let tmp = PathBuf::from("/tmp/subconverter.tar.gz");
-    download_file(&url, &tmp).map_err(|e| anyhow::anyhow!("download subconverter: {e}"))?;
+    let work = create_private_workdir("subconverter")?;
+    let result = download_subconverter_into(&work, &url);
+    let _ = fs::remove_dir_all(&work);
+    result
+}
+
+fn download_subconverter_into(work: &Path, url: &str) -> anyhow::Result<()> {
+    let tmp = work.join("subconverter.tar.gz");
+    download_file(url, &tmp).map_err(|e| anyhow::anyhow!("download subconverter: {e}"))?;
     let dest = subconverter_dir();
     let _ = fs::remove_dir_all(&dest);
     fs::create_dir_all(&dest)?;
@@ -265,9 +322,19 @@ mod tests {
     use flate2::Compression;
 
     #[test]
-    fn download_file_writes_response_body() {
-        // Without a local HTTP server dependency, exercise extract + size limit paths.
-        assert!(max_download_bytes() > 0);
+    fn create_new_file_refuses_to_write_through_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim");
+        fs::write(&victim, "original").unwrap();
+        let link = dir.path().join("artifact.tmp");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        let mut f = create_new_file(&link).unwrap();
+        f.write_all(b"evil!").unwrap();
+        drop(f);
+
+        assert_eq!(fs::read_to_string(&victim).unwrap(), "original");
+        assert!(link.symlink_metadata().unwrap().file_type().is_file());
     }
 
     #[test]
