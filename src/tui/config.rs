@@ -19,8 +19,7 @@ use crate::tui::widgets::{
 };
 use crate::tui::wizard::format_dns_mismatch;
 use crate::tui::{
-    capitalize_first, edit_text, insert_text, random_hex, random_secret, random_ss2022_secret,
-    random_token, Edit,
+    capitalize_first, random_hex, random_secret, random_ss2022_secret, random_token, Field,
 };
 
 const POLL: Duration = Duration::from_millis(80);
@@ -62,14 +61,6 @@ impl Step {
             Step::Review => "Review",
         }
     }
-}
-
-struct Field {
-    label: &'static str,
-    help: &'static str,
-    value: String,
-    password: bool,
-    pos: usize,
 }
 
 struct Editor {
@@ -289,24 +280,13 @@ impl Editor {
 
     fn type_into(&mut self, code: KeyCode, mods: KeyModifiers) {
         if let Some(field) = self.focused_field() {
-            let edit = match code {
-                KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => Edit::Clear,
-                KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) => Edit::Insert(c),
-                KeyCode::Backspace => Edit::Backspace,
-                KeyCode::Delete => Edit::Delete,
-                KeyCode::Left => Edit::Left,
-                KeyCode::Right => Edit::Right,
-                KeyCode::Home => Edit::Home,
-                KeyCode::End => Edit::End,
-                _ => return,
-            };
-            edit_text(&mut field.value, &mut field.pos, edit);
+            field.edit(code, mods);
         }
     }
 
     pub fn handle_paste(&mut self, text: &str) {
         if let Some(field) = self.focused_field() {
-            insert_text(&mut field.value, &mut field.pos, text);
+            field.paste(text);
         }
     }
 

@@ -1,10 +1,12 @@
 mod config;
+mod field;
 mod terminal;
 mod theme;
 mod widgets;
 mod wizard;
 
 pub use config::run_config_wizard;
+pub use field::Field;
 pub use terminal::UserCancelled;
 pub use wizard::run_wizard;
 
