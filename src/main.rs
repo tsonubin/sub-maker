@@ -104,7 +104,63 @@ fn main() {
     }
 }
 
+/// Rejects invocations that request more than one action. The flag and
+/// subcommand vocabularies are both kept for compatibility, but a flag
+/// silently winning over a subcommand (or another flag) hides user intent.
+fn check_single_action(cli: &Cli) -> anyhow::Result<()> {
+    let mut req: Vec<(&'static str, &'static str)> = Vec::new(); // (action id, label)
+    if cli.setup {
+        req.push(("setup", "--setup"));
+    }
+    if cli.serve {
+        req.push(("serve", "--serve"));
+    }
+    if cli.nodes {
+        req.push(("nodes", "--nodes"));
+    }
+    if cli.update {
+        req.push(("update", "--update"));
+    }
+    if cli.renew {
+        req.push(("renew", "--renew"));
+    }
+    if let Some(cmd) = &cli.command {
+        let entry = match cmd {
+            Commands::Setup => ("setup", "setup"),
+            Commands::Config | Commands::Configure => ("config", "config"),
+            Commands::Serve => ("serve", "serve"),
+            Commands::Nodes => ("nodes", "nodes"),
+            Commands::Update => ("update", "update"),
+            Commands::Renew => ("renew", "renew"),
+            Commands::Links => ("links", "links"),
+            Commands::Link { .. } => ("link", "link"),
+            Commands::Doctor => ("doctor", "doctor"),
+            Commands::Status => ("service", "status"),
+            Commands::Restart => ("service", "restart"),
+            Commands::Start => ("service", "start"),
+            Commands::Stop => ("service", "stop"),
+        };
+        req.push(entry);
+    }
+    // The same action named twice (e.g. `--setup setup`) is not a conflict.
+    let mut distinct: Vec<&(&'static str, &'static str)> = Vec::new();
+    for entry in &req {
+        if !distinct.iter().any(|(id, _)| *id == entry.0) {
+            distinct.push(entry);
+        }
+    }
+    if distinct.len() > 1 {
+        let labels: Vec<&str> = distinct.iter().map(|(_, label)| *label).collect();
+        anyhow::bail!(
+            "cannot combine {}; request one action and see sub-maker --help",
+            labels.join(" with ")
+        );
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> anyhow::Result<()> {
+    check_single_action(&cli)?;
     // Flag forms (compatible with Go CLI).
     if cli.setup {
         return run_setup();
@@ -210,4 +266,41 @@ fn run_renew() -> anyhow::Result<()> {
         println!("managed certificate unchanged; nothing to restart");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cli() -> Cli {
+        Cli {
+            setup: false,
+            serve: false,
+            nodes: false,
+            update: false,
+            renew: false,
+            command: None,
+        }
+    }
+
+    #[test]
+    fn one_action_per_invocation() {
+        let mut c = cli();
+        c.nodes = true;
+        c.command = Some(Commands::Setup);
+        let err = check_single_action(&c).unwrap_err().to_string();
+        assert!(err.contains("--nodes") && err.contains("setup"), "{err}");
+
+        let mut c = cli();
+        c.setup = true;
+        c.command = Some(Commands::Setup);
+        check_single_action(&c).expect("the same action twice is not a conflict");
+
+        let mut c = cli();
+        c.setup = true;
+        c.serve = true;
+        assert!(check_single_action(&c).is_err());
+
+        check_single_action(&cli()).expect("no action is allowed (prints help)");
+    }
 }

@@ -104,6 +104,8 @@ sudo sub-maker config
 | `--update` | Refresh sing-box + subconverter binaries |
 | `--version` | Print version |
 
+One action per invocation: combining a flag with a different subcommand (or with another flag) is rejected instead of silently preferring one.
+
 **Environment**
 
 | Variable | Purpose |
