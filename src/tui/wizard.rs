@@ -10,7 +10,7 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::config::{
-    self, CertStrategy, DnsCheckResult, SetupConfig, SetupMode, ALL_PROTOCOLS,
+    self, CertStrategy, DnsCheckResult, SetupConfig, SetupMode,
 };
 use crate::diagnostics;
 use crate::tui::terminal::{cancel_err, next_key, Tui};
@@ -282,7 +282,7 @@ impl Wizard {
             }
             Step::Protocols => {
                 if self.enabled_protocols().is_empty() {
-                    self.proto_selected = [true; 5];
+                    anyhow::bail!("select at least one protocol (Space toggles, a = all, n = none)");
                 }
                 if self.needs_certs() {
                     if self.setup_mode() == SetupMode::IpOnly {
@@ -313,7 +313,7 @@ impl Wizard {
                 self.enter_details()?;
             }
             Step::Details => {
-                self.save_current_detail();
+                self.save_current_detail()?;
                 if self.detail_idx + 1 < self.detail_protos.len() {
                     self.detail_idx += 1;
                     self.load_detail_fields();
@@ -345,7 +345,10 @@ impl Wizard {
             }
             Step::Details => {
                 if self.detail_idx > 0 {
-                    self.save_current_detail();
+                    if let Err(e) = self.save_current_detail() {
+                        self.error = Some(e.to_string());
+                        return;
+                    }
                     self.detail_idx -= 1;
                     self.load_detail_fields();
                 } else if self.needs_certs() {
@@ -366,8 +369,20 @@ impl Wizard {
     }
 
     fn validate_identity(&self) -> anyhow::Result<()> {
+        if self.identity[0].value.trim().is_empty() {
+            anyhow::bail!("server address is required (public IP or domain used in the share links)");
+        }
         if self.setup_mode() == SetupMode::Production && self.identity[1].value.trim().is_empty() {
             anyhow::bail!("domain is required for production setup");
+        }
+        let sub_port = self.identity[5].value.trim();
+        if !sub_port.is_empty() {
+            let port: u16 = sub_port
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid subscription port: {sub_port:?}"))?;
+            if port == 0 {
+                anyhow::bail!("subscription port must be between 1 and 65535");
+            }
         }
         Ok(())
     }
@@ -394,36 +409,47 @@ impl Wizard {
     }
 
     fn prepare_cert_extra(&mut self) {
-        self.cert_extra.clear();
-        match self.cert_strategy() {
-            CertStrategy::AcmeDnsCf => {
-                self.cert_extra.push(Field {
-                    label: "Cloudflare API token",
-                    help: "DNS edit permission for the zone",
-                    value: String::new(),
-                    password: true,
-                });
-            }
-            CertStrategy::Existing => {
-                self.cert_extra.push(Field {
+        let previous = std::mem::take(&mut self.cert_extra);
+        let mut fields = match self.cert_strategy() {
+            CertStrategy::AcmeDnsCf => vec![Field {
+                label: "Cloudflare API token",
+                help: "DNS edit permission for the zone",
+                value: String::new(),
+                password: true,
+            }],
+            CertStrategy::Existing => vec![
+                Field {
                     label: "Certificate path",
                     help: "fullchain.pem",
                     value: "/etc/sub-maker/certs/fullchain.pem".into(),
                     password: false,
-                });
-                self.cert_extra.push(Field {
+                },
+                Field {
                     label: "Private key path",
                     help: "privkey.pem",
                     value: "/etc/sub-maker/certs/privkey.pem".into(),
                     password: false,
-                });
+                },
+            ],
+            _ => vec![],
+        };
+        // Keep what the user already typed when re-entering with the same
+        // field set (e.g. after back-navigation); only reset on change.
+        if previous.len() == fields.len()
+            && previous
+                .iter()
+                .zip(fields.iter())
+                .all(|(old, new)| old.label == new.label)
+        {
+            for (old, new) in previous.into_iter().zip(fields.iter_mut()) {
+                new.value = old.value;
             }
-            _ => {}
         }
+        self.cert_extra = fields;
     }
 
     fn apply_cert_extra(&mut self) -> anyhow::Result<()> {
-        if self.cert_strategy() == CertStrategy::Existing {
+        if self.cert_strategy() == CertStrategy::Existing && self.cert_extra.len() >= 2 {
             let cert = self.cert_extra[0].value.trim();
             let key = self.cert_extra[1].value.trim();
             let domain = self.identity[1].value.trim();
@@ -513,18 +539,21 @@ impl Wizard {
         self.detail_focus = 0;
     }
 
-    fn save_current_detail(&mut self) {
+    fn save_current_detail(&mut self) -> anyhow::Result<()> {
         if self.detail_protos.is_empty() {
-            return;
+            return Ok(());
         }
         let p = self.detail_protos[self.detail_idx].clone();
         let mut extra = HashMap::new();
         let mut fi = 0;
-        if let Ok(port) = self.detail_fields[fi].value.trim().parse::<u16>() {
-            if port > 0 {
-                self.ports.insert(p.clone(), port);
-            }
+        let port_str = self.detail_fields[fi].value.trim();
+        let port: u16 = port_str
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid listen port for {p}: {port_str:?}"))?;
+        if port == 0 {
+            anyhow::bail!("listen port for {p} must be between 1 and 65535");
         }
+        self.ports.insert(p.clone(), port);
         fi += 1;
         let remark = self.detail_fields[fi].value.trim().to_string();
         if !remark.is_empty() {
@@ -570,15 +599,16 @@ impl Wizard {
             extra.insert("short_id".into(), sid);
         }
         self.creds.insert(p, extra);
+        Ok(())
     }
 
     fn build_config(&mut self) -> anyhow::Result<SetupConfig> {
-        self.save_current_detail();
+        self.save_current_detail()?;
         let mut cfg = SetupConfig::default_config();
         cfg.setup_mode = self.setup_mode();
         cfg.server_addr = self.identity[0].value.trim().to_string();
         if cfg.server_addr.is_empty() {
-            cfg.server_addr = "127.0.0.1".into();
+            anyhow::bail!("server address is required");
         }
         cfg.domain = self.identity[1].value.trim().to_string();
         cfg.email = self.identity[2].value.trim().to_string();
@@ -595,17 +625,18 @@ impl Wizard {
             passcode
         };
         cfg.set_link_passcode(&passcode)?;
-        cfg.sub_port = self.identity[5]
-            .value
-            .trim()
-            .parse()
-            .unwrap_or(8964);
+        cfg.sub_port = match self.identity[5].value.trim() {
+            "" => 8964,
+            v => v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid subscription port: {v:?}"))?,
+        };
         if cfg.sub_port == 0 {
-            cfg.sub_port = 8964;
+            anyhow::bail!("subscription port must be between 1 and 65535");
         }
         cfg.enabled_protocols = self.enabled_protocols();
         if cfg.enabled_protocols.is_empty() {
-            cfg.enabled_protocols = ALL_PROTOCOLS.iter().map(|s| s.to_string()).collect();
+            anyhow::bail!("select at least one protocol");
         }
         cfg.ports = self.ports.clone();
         cfg.creds = self.creds.clone();
@@ -687,7 +718,11 @@ impl Wizard {
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.mode_cursor = (self.mode_cursor + 1).min(1);
                 }
-                KeyCode::Enter | KeyCode::Right => self.go_next()?,
+                KeyCode::Enter | KeyCode::Right => {
+                    if let Err(e) = self.go_next() {
+                        self.error = Some(e.to_string());
+                    }
+                }
                 _ => {}
             },
             Step::Identity => match code {
@@ -723,7 +758,11 @@ impl Wizard {
                 }
                 KeyCode::Char('a') => self.proto_selected = [true; 5],
                 KeyCode::Char('n') => self.proto_selected = [false; 5],
-                KeyCode::Enter | KeyCode::Right => self.go_next()?,
+                KeyCode::Enter | KeyCode::Right => {
+                    if let Err(e) = self.go_next() {
+                        self.error = Some(e.to_string());
+                    }
+                }
                 KeyCode::Left | KeyCode::BackTab => self.go_back(),
                 _ => {}
             },
@@ -786,8 +825,8 @@ impl Wizard {
                 KeyCode::Enter => {
                     if self.detail_focus + 1 < self.detail_fields.len() {
                         self.detail_focus += 1;
-                    } else {
-                        self.go_next()?;
+                    } else if let Err(e) = self.go_next() {
+                        self.error = Some(e.to_string());
                     }
                 }
                 KeyCode::Left if mods.contains(KeyModifiers::CONTROL) => self.go_back(),
