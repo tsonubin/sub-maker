@@ -562,6 +562,7 @@ fn setup_subconverter_files(etc_sub: &Path, opt_sc: &Path) -> anyhow::Result<()>
 }
 
 pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Result<()> {
+    config::validate_sub_token(&cfg.sub_token)?;
     let unit_names = [
         "sing-box.service",
         "subconverter.service",
@@ -590,7 +591,25 @@ pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Resu
         } else {
             PathBuf::from("/etc/systemd/system").join(name)
         };
-        match fs::write(&path, &rendered) {
+        // The subscription unit embeds the token; keep it root-readable only.
+        let mode = if name == "sub-maker-sub.service" {
+            0o600
+        } else {
+            0o644
+        };
+        let write_result = (|| -> anyhow::Result<()> {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .open(&path)?;
+            std::io::Write::write_all(&mut f, rendered.as_bytes())?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
+            Ok(())
+        })();
+        match write_result {
             Ok(()) => info!(path = %path.display(), "wrote unit"),
             Err(err) => warn!(path = %path.display(), error = %err, "write unit"),
         }
@@ -659,6 +678,9 @@ mod tests {
 
     #[test]
     fn write_systemd_units_renders_sub_maker_subscription_unit() {
+        // Serialize env mutations — parallel tests share process env.
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("SUB_MAKER_DEMO", "1");
         let unit_path = PathBuf::from("/tmp/sub-maker-sub.service");
         let _ = fs::remove_file(&unit_path);
@@ -677,7 +699,28 @@ mod tests {
         ] {
             assert!(unit.contains(want), "missing {want:?} in:\n{unit}");
         }
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&unit_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "token-bearing unit must not be world-readable");
         let _ = fs::remove_file(&unit_path);
+        std::env::remove_var("SUB_MAKER_DEMO");
+    }
+
+    #[test]
+    fn write_systemd_units_rejects_hostile_token() {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("SUB_MAKER_DEMO", "1");
+        let cfg = SetupConfig {
+            sub_token: "a\nExecStart=/bin/evil".into(),
+            ..SetupConfig::default()
+        };
+        assert!(write_systemd_units(&cfg, Path::new("/etc/sub-maker/nodes.txt")).is_err());
+        let cfg = SetupConfig {
+            sub_token: "per%cent".into(),
+            ..SetupConfig::default()
+        };
+        assert!(write_systemd_units(&cfg, Path::new("/etc/sub-maker/nodes.txt")).is_err());
         std::env::remove_var("SUB_MAKER_DEMO");
     }
 
