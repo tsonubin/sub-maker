@@ -2,10 +2,13 @@ use base64::{
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
     Engine as _,
 };
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use subtle::ConstantTimeEq;
 use tracing::info;
 use url::Url;
 
@@ -13,7 +16,17 @@ use crate::config;
 
 pub fn run() -> anyhow::Result<()> {
     let port = std::env::var("SUB_MAKER_PORT").unwrap_or_else(|_| "8964".into());
-    let token = std::env::var("SUB_MAKER_TOKEN").unwrap_or_else(|_| "changeme-in-config".into());
+    let token = std::env::var("SUB_MAKER_TOKEN").unwrap_or_default();
+    if token.is_empty() || token == "changeme-in-config" {
+        if config::demo_mode() {
+            tracing::warn!("serving with a default/empty token in demo mode");
+        } else {
+            anyhow::bail!(
+                "SUB_MAKER_TOKEN is unset or the insecure default; \
+                 set it (the generated systemd unit does) or use SUB_MAKER_DEMO=1 for smoke tests"
+            );
+        }
+    }
     let nodes_path = std::env::var("SUB_MAKER_NODES_FILE").unwrap_or_else(|_| {
         PathBuf::from(config::etc_base())
             .join("sub-maker")
@@ -37,17 +50,23 @@ pub fn run() -> anyhow::Result<()> {
     );
 
     for stream in listener.incoming() {
-        let mut stream = match stream {
+        let stream = match stream {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(error = %e, "accept failed");
                 continue;
             }
         };
+        // A client that stalls must not wedge the whole server.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
         let state = Arc::clone(&state);
-        if let Err(e) = handle_connection(&mut stream, &state) {
-            tracing::debug!(error = %e, "request handling error");
-        }
+        std::thread::spawn(move || {
+            let mut stream = stream;
+            if let Err(e) = handle_connection(&mut stream, &state) {
+                tracing::debug!(error = %e, "request handling error");
+            }
+        });
     }
     Ok(())
 }
@@ -56,6 +75,15 @@ struct ServerState {
     token: String,
     nodes_path: String,
     port: String,
+}
+
+/// Constant-time token comparison over fixed-length digests.
+fn token_matches(expected: &str, got: Option<&str>) -> bool {
+    let mut h1 = Sha256::new();
+    h1.update(expected.as_bytes());
+    let mut h2 = Sha256::new();
+    h2.update(got.unwrap_or_default().as_bytes());
+    bool::from(h1.finalize().ct_eq(&h2.finalize()))
 }
 
 fn handle_connection(stream: &mut (impl Read + Write), state: &ServerState) -> anyhow::Result<()> {
@@ -88,7 +116,7 @@ fn handle_connection(stream: &mut (impl Read + Write), state: &ServerState) -> a
             write_response(stream, 200, "text/plain; charset=utf-8", &body, &[])?;
         }
         "/raw" => {
-            if query_token.as_deref() != Some(state.token.as_str()) {
+            if !token_matches(&state.token, query_token.as_deref()) {
                 write_response(stream, 401, "text/plain", "unauthorized\n", &[])?;
                 return Ok(());
             }
@@ -101,7 +129,7 @@ fn handle_connection(stream: &mut (impl Read + Write), state: &ServerState) -> a
             write_response(stream, 200, "text/plain", &body, &[])?;
         }
         "/sub" => {
-            if query_token.as_deref() != Some(state.token.as_str()) {
+            if !token_matches(&state.token, query_token.as_deref()) {
                 write_response(stream, 401, "text/plain", "unauthorized\n", &[])?;
                 return Ok(());
             }
@@ -340,6 +368,15 @@ fn decode_ss_user_info(encoded: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_matches_only_the_exact_token() {
+        assert!(token_matches("s3cret", Some("s3cret")));
+        assert!(!token_matches("s3cret", Some("s3cre")));
+        assert!(!token_matches("s3cret", Some("")));
+        assert!(!token_matches("s3cret", None));
+        assert!(token_matches("", Some("")));
+    }
 
     #[test]
     fn nodes_to_clash_proxies_uses_protocol_accurate_fields() {
