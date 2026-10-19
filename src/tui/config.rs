@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::config::{CertStrategy, SetupConfig, SetupMode};
 use crate::diagnostics;
-use crate::tui::terminal::{cancel_err, next_key, Tui};
+use crate::tui::terminal::{cancel_err, next_input, Input, Tui};
 use crate::tui::theme::Theme;
 use crate::tui::widgets::{
     draw_fields, draw_footer, draw_header, draw_option_list, draw_review, draw_sidebar, kv_line,
@@ -19,7 +19,8 @@ use crate::tui::widgets::{
 };
 use crate::tui::wizard::format_dns_mismatch;
 use crate::tui::{
-    capitalize_first, random_hex, random_secret, random_ss2022_secret, random_token,
+    capitalize_first, edit_text, insert_text, random_hex, random_secret, random_ss2022_secret,
+    random_token, Edit,
 };
 
 const POLL: Duration = Duration::from_millis(80);
@@ -68,6 +69,7 @@ struct Field {
     help: &'static str,
     value: String,
     password: bool,
+    pos: usize,
 }
 
 struct Editor {
@@ -125,42 +127,48 @@ impl Editor {
             CertStrategy::SelfSigned => 4,
         };
 
-        let identity = vec![
+        let mut identity = vec![
             Field {
                 label: "Server address",
                 help: "Public IP or domain for client links",
                 value: cfg.server_addr.clone(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "Domain",
                 help: "Required in production mode",
                 value: cfg.domain.clone(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "ACME email",
                 help: "Contact for certificate issuance",
                 value: cfg.email.clone(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "Subscription token",
                 help: "Changing this invalidates old URLs",
                 value: cfg.sub_token.clone(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "New SSH passcode",
                 help: "Blank keeps the current passcode",
                 value: String::new(),
                 password: true,
+                pos: 0,
             },
             Field {
                 label: "Sub port",
                 help: "Subscription listen port",
                 value: cfg.sub_port.to_string(),
                 password: false,
+                pos: 0,
             },
         ];
 
@@ -171,10 +179,14 @@ impl Editor {
                 help: "DNS edit scope",
                 value: cfg.acme_cf_token.clone(),
                 password: true,
+                pos: 0,
             });
         }
-        if !cfg.cert_path.is_empty() || !cfg.key_path.is_empty() {
-            // populated when entering existing mode
+        for f in &mut identity {
+            f.pos = f.value.len();
+        }
+        for f in &mut cert_extra {
+            f.pos = f.value.len();
         }
 
         Self {
@@ -266,14 +278,35 @@ impl Editor {
         .collect()
     }
 
-    fn type_into(field: &mut Field, code: KeyCode, mods: KeyModifiers) {
-        match code {
-            KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => field.value.clear(),
-            KeyCode::Backspace => {
-                field.value.pop();
-            }
-            KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) => field.value.push(c),
-            _ => {}
+    fn focused_field(&mut self) -> Option<&mut Field> {
+        match self.step {
+            Step::Identity => self.identity.get_mut(self.identity_focus),
+            Step::Certs if self.show_cert_extra => self.cert_extra.get_mut(self.cert_extra_focus),
+            Step::Details => self.detail_fields.get_mut(self.detail_focus),
+            _ => None,
+        }
+    }
+
+    fn type_into(&mut self, code: KeyCode, mods: KeyModifiers) {
+        if let Some(field) = self.focused_field() {
+            let edit = match code {
+                KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => Edit::Clear,
+                KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) => Edit::Insert(c),
+                KeyCode::Backspace => Edit::Backspace,
+                KeyCode::Delete => Edit::Delete,
+                KeyCode::Left => Edit::Left,
+                KeyCode::Right => Edit::Right,
+                KeyCode::Home => Edit::Home,
+                KeyCode::End => Edit::End,
+                _ => return,
+            };
+            edit_text(&mut field.value, &mut field.pos, edit);
+        }
+    }
+
+    pub fn handle_paste(&mut self, text: &str) {
+        if let Some(field) = self.focused_field() {
+            insert_text(&mut field.value, &mut field.pos, text);
         }
     }
 
@@ -415,6 +448,7 @@ impl Editor {
                 help: "Blank keeps existing token",
                 value: self.original.acme_cf_token.clone(),
                 password: true,
+                pos: 0,
             }],
             CertStrategy::Existing => vec![
                 Field {
@@ -426,6 +460,7 @@ impl Editor {
                         self.original.cert_path.clone()
                     },
                     password: false,
+                    pos: 0,
                 },
                 Field {
                     label: "Private key path",
@@ -436,10 +471,14 @@ impl Editor {
                         self.original.key_path.clone()
                     },
                     password: false,
+                    pos: 0,
                 },
             ],
             _ => vec![],
         };
+        for f in fields.iter_mut() {
+            f.pos = f.value.len();
+        }
         // Keep in-progress edits when re-entering with the same field set.
         if previous.len() == fields.len()
             && previous
@@ -449,6 +488,7 @@ impl Editor {
         {
             for (old, new) in previous.into_iter().zip(fields.iter_mut()) {
                 new.value = old.value;
+                new.pos = old.pos.min(new.value.len());
             }
         }
         self.cert_extra = fields;
@@ -496,18 +536,21 @@ impl Editor {
                 help: "Inbound port",
                 value: port.to_string(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "Remark / tag",
                 help: "Client display name",
                 value: remark,
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "SNI / target",
                 help: "TLS SNI or Reality target",
                 value: default_sni,
                 password: false,
+                pos: 0,
             },
         ];
         if matches!(p.as_str(), "hysteria2" | "tuic" | "anytls" | "ss2022") {
@@ -516,6 +559,7 @@ impl Editor {
                 help: "Blank keeps current secret",
                 value: String::new(),
                 password: true,
+                pos: 0,
             });
         }
         if matches!(p.as_str(), "reality" | "tuic") {
@@ -524,6 +568,7 @@ impl Editor {
                 help: "Blank keeps current UUID",
                 value: existing.get("uuid").cloned().unwrap_or_default(),
                 password: false,
+                pos: 0,
             });
         }
         if p == "reality" {
@@ -532,13 +577,18 @@ impl Editor {
                 help: "Blank keeps existing",
                 value: existing.get("pbk").cloned().unwrap_or_default(),
                 password: false,
+                pos: 0,
             });
             fields.push(Field {
                 label: "Reality shortId",
                 help: "8 hex · blank auto if empty",
                 value: existing.get("short_id").cloned().unwrap_or_default(),
                 password: false,
+                pos: 0,
             });
+        }
+        for f in fields.iter_mut() {
+            f.pos = f.value.len();
         }
         self.detail_fields = fields;
         self.detail_focus = 0;
@@ -746,7 +796,7 @@ impl Editor {
                     }
                 }
                 KeyCode::Left if mods.contains(KeyModifiers::CONTROL) => self.go_back(),
-                other => Self::type_into(&mut self.identity[self.identity_focus], other, mods),
+                other => self.type_into(other, mods),
             },
             Step::Protocols => match code {
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -785,10 +835,7 @@ impl Editor {
                     }
                 }
                 KeyCode::Left if mods.contains(KeyModifiers::CONTROL) => self.go_back(),
-                other if !self.cert_extra.is_empty() => {
-                    Self::type_into(&mut self.cert_extra[self.cert_extra_focus], other, mods)
-                }
-                _ => {}
+                other => self.type_into(other, mods),
             },
             Step::Certs => match code {
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -822,10 +869,7 @@ impl Editor {
                     }
                 }
                 KeyCode::Left if mods.contains(KeyModifiers::CONTROL) => self.go_back(),
-                other if !self.detail_fields.is_empty() => {
-                    Self::type_into(&mut self.detail_fields[self.detail_focus], other, mods)
-                }
-                _ => {}
+                other => self.type_into(other, mods),
             },
             Step::Review => match code {
                 KeyCode::Enter => self.finished = true,
@@ -898,7 +942,7 @@ impl Editor {
                     let fields: Vec<_> = self
                         .identity
                         .iter()
-                        .map(|x| (x.label.to_string(), x.value.clone(), x.password))
+                        .map(|x| (x.label.to_string(), x.value.clone(), x.password, x.pos))
                         .collect();
                     let help = self
                         .identity
@@ -925,7 +969,7 @@ impl Editor {
                     let fields: Vec<_> = self
                         .cert_extra
                         .iter()
-                        .map(|x| (x.label.to_string(), x.value.clone(), x.password))
+                        .map(|x| (x.label.to_string(), x.value.clone(), x.password, x.pos))
                         .collect();
                     let help = self
                         .cert_extra
@@ -966,7 +1010,7 @@ impl Editor {
                     let fields: Vec<_> = self
                         .detail_fields
                         .iter()
-                        .map(|x| (x.label.to_string(), x.value.clone(), x.password))
+                        .map(|x| (x.label.to_string(), x.value.clone(), x.password, x.pos))
                         .collect();
                     let help = self
                         .detail_fields
@@ -1049,12 +1093,14 @@ pub fn run_config_wizard(existing: SetupConfig) -> anyhow::Result<SetupConfig> {
 
     loop {
         tui.draw(|f| ed.draw(f))?;
-        if let Some(key) = next_key(POLL)? {
-            match ed.handle_key(key.code, key.modifiers) {
+        match next_input(POLL)? {
+            Some(Input::Key(key)) => match ed.handle_key(key.code, key.modifiers) {
                 Ok(true) => break,
                 Ok(false) => {}
                 Err(e) => return Err(e),
-            }
+            },
+            Some(Input::Paste(text)) => ed.handle_paste(&text),
+            None => {}
         }
     }
     drop(tui);

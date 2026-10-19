@@ -166,7 +166,7 @@ pub fn draw_fields(
     f: &mut Frame,
     area: Rect,
     title: &str,
-    fields: &[(String, String, bool)], // label, value, password
+    fields: &[(String, String, bool, usize)], // label, value, password, cursor
     active: usize,
     help: &str,
 ) {
@@ -204,15 +204,20 @@ pub fn draw_fields(
         .constraints(field_constraints)
         .split(chunks[0]);
 
-    for (i, (label, value, password)) in visible.iter().enumerate() {
+    for (i, (label, value, password, pos)) in visible.iter().enumerate() {
         let focused = start + i == active;
-        let display = if *password && !value.is_empty() {
+        let shown = if *password && !value.is_empty() {
             "•".repeat(value.chars().count())
         } else if value.is_empty() {
             "·".to_string()
         } else {
             value.clone()
         };
+        // Render the caret at the field's cursor position (char-indexed).
+        let caret_at = value[..(*pos).min(value.len())].chars().count();
+        let mut chars = shown.chars();
+        let before: String = chars.by_ref().take(caret_at).collect();
+        let after: String = chars.collect();
         let border = if focused {
             Theme::border_focus()
         } else {
@@ -228,11 +233,12 @@ pub fn draw_fields(
         } else {
             Theme::body()
         };
-        let cursor = if focused { " ▏" } else { "" };
+        let caret = if focused { "▏" } else { "" };
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(display, value_style),
-                Span::styled(cursor, Theme::accent()),
+                Span::styled(before, value_style),
+                Span::styled(caret, Theme::accent()),
+                Span::styled(after, value_style),
             ]))
             .block(
                 Block::default()
