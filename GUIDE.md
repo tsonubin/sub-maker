@@ -181,6 +181,13 @@ The TUI will guide you through:
    - SSH link retrieval passcode (auto-generated if left blank)
    - Subscription port (default 8964)
 
+   Invalid values are rejected inline — a missing server address, a bad port, or an
+   empty protocol selection shows an error instead of being silently defaulted. All
+   fields support cursor movement (←/→, Home/End), Delete, Ctrl+U to clear, and
+   pasting. If the domain's DNS does not match the server yet, the wizard offers
+   **Back to edit** (default), **Continue anyway**, or **Abort setup** — nothing you
+   typed is lost.
+
 3. **Protocol selection**
    - Multi-select the protocols you want (all five are pre-selected).
 
@@ -257,6 +264,7 @@ Useful commands:
 sudo sub-maker config
 sudo sub-maker links
 sudo sub-maker link
+sudo sub-maker renew
 sudo sub-maker doctor
 sudo sub-maker status
 sudo sub-maker restart
