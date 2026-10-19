@@ -6,6 +6,10 @@ Wants=subconverter.service
 [Service]
 Type=simple
 User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
 Environment=SUB_MAKER_TOKEN={{.Token}}
 Environment=SUB_MAKER_PORT={{.Port}}
 Environment=SUB_MAKER_NODES_FILE={{.NodesPath}}
