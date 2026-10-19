@@ -678,18 +678,25 @@ impl Editor {
     fn handle_key(&mut self, code: KeyCode, mods: KeyModifiers) -> anyhow::Result<bool> {
         if self.dns_warning.is_some() {
             match code {
-                KeyCode::Left | KeyCode::Right => self.dns_cursor = 1 - self.dns_cursor,
-                KeyCode::Enter => {
-                    if self.dns_cursor == 1 {
+                KeyCode::Left | KeyCode::Right => {
+                    self.dns_cursor = (self.dns_cursor + 1) % 3;
+                }
+                KeyCode::Enter => match self.dns_cursor {
+                    1 => {
                         self.dns_warning = None;
                         self.step = Step::Protocols;
-                    } else {
+                    }
+                    2 => {
                         anyhow::bail!(
                             "DNS for {} does not point at this server",
                             self.identity[1].value.trim()
                         );
                     }
-                }
+                    _ => {
+                        // Back to edit: keep everything typed.
+                        self.dns_warning = None;
+                    }
+                },
                 KeyCode::Esc => self.dns_warning = None,
                 KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => {
                     return Err(cancel_err());
@@ -861,26 +868,20 @@ impl Editor {
                     .wrap(Wrap { trim: true }),
                 chunks[0],
             );
-            let yes = self.dns_cursor == 1;
+            let style_for = |i: usize| {
+                if self.dns_cursor == i {
+                    Theme::selected()
+                } else {
+                    Theme::muted()
+                }
+            };
             f.render_widget(
                 Paragraph::new(Line::from(vec![
-                    Span::styled(
-                        "  Abort  ",
-                        if !yes {
-                            Theme::selected()
-                        } else {
-                            Theme::muted()
-                        },
-                    ),
+                    Span::styled("  Back  ", style_for(0)),
                     Span::raw("  "),
-                    Span::styled(
-                        "  Continue  ",
-                        if yes {
-                            Theme::selected()
-                        } else {
-                            Theme::muted()
-                        },
-                    ),
+                    Span::styled("  Continue  ", style_for(1)),
+                    Span::raw("  "),
+                    Span::styled("  Abort  ", style_for(2)),
                 ])),
                 chunks[1],
             );

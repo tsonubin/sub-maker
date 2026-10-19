@@ -676,21 +676,29 @@ impl Wizard {
         // returns true when done
         if self.dns_warning.is_some() {
             match code {
-                KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') => {
-                    self.dns_cursor = 1 - self.dns_cursor;
+                KeyCode::Left | KeyCode::Char('h') => {
+                    self.dns_cursor = (self.dns_cursor + 2) % 3;
                 }
-                KeyCode::Enter => {
-                    if self.dns_cursor == 1 {
+                KeyCode::Right | KeyCode::Char('l') => {
+                    self.dns_cursor = (self.dns_cursor + 1) % 3;
+                }
+                KeyCode::Enter => match self.dns_cursor {
+                    1 => {
                         self.dns_warning = None;
                         self.step = Step::Protocols;
                         self.max_reached = self.max_reached.max(self.step as usize);
-                    } else {
+                    }
+                    2 => {
                         return Err(anyhow::anyhow!(
                             "DNS for {} does not point at this server",
                             self.identity[1].value.trim()
                         ));
                     }
-                }
+                    _ => {
+                        // Back to edit: keep everything typed.
+                        self.dns_warning = None;
+                    }
+                },
                 KeyCode::Esc => {
                     self.dns_warning = None;
                 }
@@ -1128,22 +1136,20 @@ impl Wizard {
             chunks[0],
         );
 
-        let yes = self.dns_cursor == 1;
-        let abort_style = if !yes {
-            Theme::selected()
-        } else {
-            Theme::muted()
-        };
-        let cont_style = if yes {
-            Theme::selected()
-        } else {
-            Theme::muted()
+        let style_for = |i: usize| {
+            if self.dns_cursor == i {
+                Theme::selected()
+            } else {
+                Theme::muted()
+            }
         };
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("  Abort setup  ", abort_style),
+                Span::styled("  Back to edit  ", style_for(0)),
                 Span::raw("   "),
-                Span::styled("  Continue anyway  ", cont_style),
+                Span::styled("  Continue anyway  ", style_for(1)),
+                Span::raw("   "),
+                Span::styled("  Abort setup  ", style_for(2)),
             ])),
             chunks[1],
         );
