@@ -54,7 +54,7 @@ What the script does:
 
 1. Detects `amd64` or `arm64`
 2. Fetches the matching asset from the latest [GitHub Release](https://github.com/tsonubin/sub-maker/releases)
-3. Optionally verifies against `checksums.txt` when available
+3. Verifies the binary against `checksums.txt` and refuses to install on mismatch (override: `SUB_MAKER_INSTALL_INSECURE=1`)
 4. Installs to `/usr/local/bin/sub-maker`
 5. If a release download is unavailable, falls back to **building from source** (installs Rust via rustup if needed)
 

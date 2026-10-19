@@ -24,7 +24,7 @@ brew install sub-maker
 
 Also covered there: manual binaries, build from source, firewall, upgrade, uninstall.
 
-Demo without root:
+Demo without root (non-interactive: skips the TUI and applies built-in defaults):
 
 ```bash
 SUB_MAKER_DEMO=1 sub-maker --setup
@@ -108,7 +108,7 @@ sudo sub-maker config
 | Variable | Purpose |
 |----------|---------|
 | `SUB_MAKER_DEMO=1` | Non-interactive demo paths; no real service enable |
-| `SUB_MAKER_TOKEN` | Token for `--serve` |
+| `SUB_MAKER_TOKEN` | Token for `--serve` (required; `--serve` refuses empty/default tokens outside demo mode) |
 | `SUB_MAKER_PORT` | Listen port for `--serve` (default 8964) |
 | `SUB_MAKER_NODES_FILE` | Path to `nodes.txt` for `--serve` |
 
