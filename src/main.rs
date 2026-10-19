@@ -66,7 +66,7 @@ enum Commands {
     Links,
     /// Print subscription URL after passcode verification
     Link {
-        /// Passcode for SSH link retrieval
+        /// Passcode for SSH link retrieval (visible in process listings; prefer --passcode-stdin)
         #[arg(long, default_value = "")]
         passcode: String,
         /// Read passcode from stdin

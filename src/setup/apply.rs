@@ -35,11 +35,19 @@ pub fn apply(cfg: &mut SetupConfig) -> anyhow::Result<()> {
 
     info!("downloading sing-box...");
     if let Err(err) = download_sing_box("") {
-        warn!(error = %err, "sing-box download failed (may already exist or network)");
+        warn!(
+            error = %err,
+            "sing-box download failed; continuing with any installed binary (if missing, \
+             install it manually from https://github.com/SagerNet/sing-box/releases and re-run)"
+        );
     }
     info!("downloading subconverter...");
     if let Err(err) = download_subconverter("") {
-        warn!(error = %err, "subconverter download failed");
+        warn!(
+            error = %err,
+            "subconverter download failed; continuing without it (optional component; \
+             retry later or install under /opt/subconverter)"
+        );
     }
 
     ensure_certificates(cfg)?;
@@ -326,7 +334,7 @@ fn generate_reality_keypair() -> anyhow::Result<(String, String)> {
     let output = Command::new(&binary)
         .args(["generate", "reality-keypair"])
         .output()
-        .map_err(|e| anyhow::anyhow!("generate reality keypair: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("run {} to generate Reality keys: {e}", binary.display()))?;
     if !output.status.success() {
         anyhow::bail!(
             "generate reality keypair: {}\n{}",
