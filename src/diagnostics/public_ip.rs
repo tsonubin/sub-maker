@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 #[derive(Clone)]
@@ -86,21 +86,44 @@ pub fn is_public_ip(value: &str) -> bool {
         return false;
     };
     match addr {
-        IpAddr::V4(v4) => {
-            !v4.is_private()
-                && !v4.is_loopback()
-                && !v4.is_link_local()
-                && !v4.is_unspecified()
-                && !v4.is_broadcast()
-                && !v4.is_documentation()
-        }
-        IpAddr::V6(v6) => {
-            !v6.is_loopback()
-                && !v6.is_unspecified()
-                && !v6.is_unique_local()
-                && !v6.is_unicast_link_local()
-        }
+        IpAddr::V4(v4) => is_public_ipv4(v4),
+        IpAddr::V6(v6) => is_public_ipv6(v6),
     }
+}
+
+fn is_public_ipv4(addr: Ipv4Addr) -> bool {
+    let raw = u32::from(addr);
+    !addr.is_private()
+        && !addr.is_loopback()
+        && !addr.is_link_local()
+        && !addr.is_unspecified()
+        && !addr.is_broadcast()
+        && !addr.is_documentation()
+        // 0.0.0.0/8, RFC 6890.
+        && raw & 0xff00_0000 != 0
+        // 100.64.0.0/10, shared address space (RFC 6598).
+        && raw & 0xffc0_0000 != 0x6440_0000
+        // 192.0.0.0/24, IETF protocol assignments (RFC 6890).
+        && raw & 0xffff_ff00 != 0xc000_0000
+        // 198.18.0.0/15, benchmarking (RFC 2544).
+        && raw & 0xffff_0000 != 0xc612_0000
+        // 224.0.0.0/4, multicast; 240.0.0.0/4, reserved (RFC 6890).
+        && raw & 0xe000_0000 != 0xe000_0000
+}
+
+fn is_public_ipv6(addr: Ipv6Addr) -> bool {
+    if let Some(v4) = addr.to_ipv4_mapped() {
+        return is_public_ipv4(v4);
+    }
+    let segments = addr.segments();
+    !addr.is_loopback()
+        && !addr.is_unspecified()
+        && !addr.is_unique_local()
+        && !addr.is_unicast_link_local()
+        // 2001:db8::/32, documentation (RFC 3849).
+        && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+        // ff00::/8, multicast (RFC 4291).
+        && segments[0] & 0xff00 != 0xff00
 }
 
 #[cfg(test)]
@@ -108,24 +131,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_public_ip_rejects_non_public_values() {
+    fn is_public_ip_rejects_special_use_ranges_and_accepts_public_addresses() {
         for value in [
             "",
             "not-an-ip",
-            "127.0.0.1",
+            "0.1.2.3",
             "10.0.0.1",
+            "100.64.0.1",
+            "127.0.0.1",
+            "169.254.1.1",
+            "192.0.0.1",
             "192.168.1.1",
+            "198.18.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "::",
             "::1",
             "fc00::1",
+            "fe80::1",
+            "2001:db8::1",
+            "ff02::1",
         ] {
             assert!(!is_public_ip(value), "is_public_ip({value:?}) = true");
         }
-    }
 
-    #[test]
-    fn detect_public_ip_uses_first_public_response() {
-        // Lightweight unit test without live network: exercise endpoint parsing path.
-        assert!(is_public_ip("8.8.8.8"));
-        assert!(is_public_ip("1.1.1.1"));
+        for value in ["1.1.1.1", "8.8.8.8", "2001:4860:4860::8888"] {
+            assert!(is_public_ip(value), "is_public_ip({value:?}) = false");
+        }
     }
 }

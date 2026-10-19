@@ -65,8 +65,9 @@ where
             (result, None)
         }
         Err(err) => {
-            result.ipv4_matches = expected_ipv4.is_empty();
-            result.ipv6_matches = expected_ipv6.is_empty();
+            // A failed lookup never proves that the expected address matches.
+            result.ipv4_matches = false;
+            result.ipv6_matches = false;
             (result, Some(err))
         }
     }
@@ -131,11 +132,12 @@ mod tests {
     }
 
     #[test]
-    fn check_domain_dns_returns_partial_result_on_lookup_error() {
-        let (result, err) = check_domain_dns_with("example.com", "43.245.198.178", "", |_| {
+    fn check_domain_dns_marks_lookup_errors_as_unmatched() {
+        let (result, err) = check_domain_dns_with("example.com", "", "", |_| {
             Err(anyhow::anyhow!("no such host"))
         });
         assert!(err.is_some());
         assert_eq!(result.domain, "example.com");
+        assert!(!dns_matches(&result));
     }
 }
