@@ -503,7 +503,7 @@ pub fn render_sing_box_config(cfg: &SetupConfig, etc_sb: &Path) -> anyhow::Resul
                 cfg.ports.get(proto).copied().unwrap_or(0)
             )
         });
-        inbound_strs.push(assets::render_simple(&tpl_content, &data));
+        inbound_strs.push(assets::render_json(&tpl_content, &data, &["Port"]));
     }
 
     // Assemble base JSON without relying on Go's range template.
@@ -537,7 +537,7 @@ pub fn render_sing_box_config(cfg: &SetupConfig, etc_sb: &Path) -> anyhow::Resul
     );
 
     if let Err(err) = serde_json::from_str::<serde_json::Value>(&base) {
-        warn!(error = %err, "sing-box config may not be perfect json");
+        anyhow::bail!("generated sing-box config is not valid JSON: {err}");
     }
     fs::write(etc_sb.join("config.json"), base)?;
     Ok(())
@@ -746,6 +746,26 @@ mod tests {
         let inbounds = parsed["inbounds"].as_array().unwrap();
         assert_eq!(inbounds.len(), 1);
         assert_eq!(inbounds[0]["type"], "shadowsocks");
+    }
+
+    #[test]
+    fn render_sing_box_config_escapes_credentials_in_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = SetupConfig {
+            enabled_protocols: vec!["ss2022".into()],
+            ports: [("ss2022".into(), 8388)].into_iter().collect(),
+            creds: [(
+                "ss2022".into(),
+                [("pass".into(), "p\"w\\d\nx".into())].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..SetupConfig::default()
+        };
+        render_sing_box_config(&cfg, dir.path()).unwrap();
+        let data = fs::read_to_string(dir.path().join("config.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(parsed["inbounds"][0]["password"], "p\"w\\d\nx");
     }
 
     #[test]

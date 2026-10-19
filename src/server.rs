@@ -264,6 +264,26 @@ fn demo_nodes() -> Vec<String> {
     ]
 }
 
+/// Renders a YAML double-quoted scalar, escaping the values that would
+/// otherwise break (or inject into) the generated Clash config.
+fn yaml_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 pub fn nodes_to_clash_proxies_with_names(nodes: &[String]) -> (String, Vec<String>) {
     let mut buf = String::new();
     let mut names = Vec::new();
@@ -291,23 +311,28 @@ pub fn nodes_to_clash_proxies_with_names(nodes: &[String]) -> (String, Vec<Strin
                 .unwrap_or_default()
         };
 
+        let remark_q = yaml_quote(&remark);
+        let host_q = yaml_quote(host);
+        let sni_q = yaml_quote(&query("sni"));
+
         let line = match scheme {
             "hysteria2" => format!(
-                "  - {{name: \"{remark}\", type: hysteria2, server: {host}, port: {port}, password: \"{username}\", sni: \"{}\", alpn: [h3], udp: true, skip-cert-verify: false}}\n",
-                query("sni")
+                "  - {{name: {remark_q}, type: hysteria2, server: {host_q}, port: {port}, password: {}, sni: {sni_q}, alpn: [h3], udp: true, skip-cert-verify: false}}\n",
+                yaml_quote(username)
             ),
             "vless" => {
                 let sec = query("security");
                 if sec == "reality" {
                     format!(
-                        "  - {{name: \"{remark}\", type: vless, server: {host}, port: {port}, uuid: \"{username}\", network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: \"{}\", packet-encoding: xudp, reality-opts: {{public-key: \"{}\", short-id: \"{}\"}}, client-fingerprint: chrome}}\n",
-                        query("sni"),
-                        query("pbk"),
-                        query("sid")
+                        "  - {{name: {remark_q}, type: vless, server: {host_q}, port: {port}, uuid: {}, network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: {sni_q}, packet-encoding: xudp, reality-opts: {{public-key: {}, short-id: {}}}, client-fingerprint: chrome}}\n",
+                        yaml_quote(username),
+                        yaml_quote(&query("pbk")),
+                        yaml_quote(&query("sid"))
                     )
                 } else {
                     format!(
-                        "  - {{name: \"{remark}\", type: vless, server: {host}, port: {port}, uuid: \"{username}\", tls: true, udp: true}}\n"
+                        "  - {{name: {remark_q}, type: vless, server: {host_q}, port: {port}, uuid: {}, tls: true, udp: true}}\n",
+                        yaml_quote(username)
                     )
                 }
             }
@@ -324,27 +349,30 @@ pub fn nodes_to_clash_proxies_with_names(nodes: &[String]) -> (String, Vec<Strin
                     (username.to_string(), password.to_string())
                 };
                 format!(
-                    "  - {{name: \"{remark}\", type: tuic, server: {host}, port: {port}, uuid: \"{uuid}\", password: \"{pass}\", sni: \"{}\", alpn: [h3], udp: true, udp-relay-mode: native, congestion-controller: bbr}}\n",
-                    query("sni")
+                    "  - {{name: {remark_q}, type: tuic, server: {host_q}, port: {port}, uuid: {}, password: {}, sni: {sni_q}, alpn: [h3], udp: true, udp-relay-mode: native, congestion-controller: bbr}}\n",
+                    yaml_quote(&uuid),
+                    yaml_quote(&pass)
                 )
             }
             "anytls" => format!(
-                "  - {{name: \"{remark}\", type: anytls, server: {host}, port: {port}, password: \"{username}\", sni: \"{}\", client-fingerprint: chrome, udp: true, alpn: [h2, http/1.1]}}\n",
-                query("sni")
+                "  - {{name: {remark_q}, type: anytls, server: {host_q}, port: {port}, password: {}, sni: {sni_q}, client-fingerprint: chrome, udp: true, alpn: [h2, http/1.1]}}\n",
+                yaml_quote(username)
             ),
             "ss" => {
                 let (cipher, password) = decode_ss_user_info(username);
                 format!(
-                    "  - {{name: \"{remark}\", type: ss, server: {host}, port: {port}, cipher: \"{cipher}\", password: \"{password}\", udp: true}}\n"
+                    "  - {{name: {remark_q}, type: ss, server: {host_q}, port: {port}, cipher: {}, password: {}, udp: true}}\n",
+                    yaml_quote(&cipher),
+                    yaml_quote(&password)
                 )
             }
             _ => format!(
-                "  - {{name: \"{remark}\", type: ss, server: {host}, port: {port}, cipher: \"aes-128-gcm\", password: \"demo\"}}\n"
+                "  - {{name: {remark_q}, type: ss, server: {host_q}, port: {port}, cipher: \"aes-128-gcm\", password: \"demo\"}}\n"
             ),
         };
         if !line.is_empty() {
             buf.push_str(&line);
-            names.push(remark);
+            names.push(remark_q);
         }
     }
     (buf, names)
@@ -407,6 +435,23 @@ mod tests {
             assert!(yaml.contains(check), "expected YAML to contain {check:?}:\n{yaml}");
         }
         assert!(!yaml.contains("type: trojan"));
+    }
+
+    #[test]
+    fn nodes_to_clash_escapes_yaml_specials_and_ipv6_hosts() {
+        let nodes = vec![
+            // query_pairs percent-decodes: sni becomes a"b\c
+            "hysteria2://p@1.2.3.4:8443/?sni=a%22b%5Cc#node1".into(),
+            "ss://YWVzLTEyOC1nY206cA@[::1]:8388#v6".into(),
+        ];
+        let (yaml, names) = nodes_to_clash_proxies_with_names(&nodes);
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str(&format!("proxies:\n{yaml}")).expect("generated YAML must parse");
+        assert_eq!(doc["proxies"][0]["sni"].as_str().unwrap(), "a\"b\\c");
+        assert_eq!(doc["proxies"][1]["server"].as_str().unwrap(), "[::1]");
+        // Group-list names must parse back to the same scalars as proxy names.
+        let group_name: serde_yaml::Value = serde_yaml::from_str(&names[0]).unwrap();
+        assert_eq!(group_name.as_str().unwrap(), "node1");
     }
 
     #[test]
