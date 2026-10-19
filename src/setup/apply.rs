@@ -396,24 +396,14 @@ pub fn protocol_server_name(
 }
 
 fn read_template(name: &str) -> anyhow::Result<String> {
-    if let Ok(data) = fs::read_to_string(name) {
-        return Ok(data);
-    }
     let base = Path::new(name)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or(name);
-    if let Ok(data) = fs::read_to_string(format!("templates/{base}")) {
-        return Ok(data);
-    }
+    // Embedded assets only: these become root service units and configs and
+    // must never be influenced by the caller's working directory.
     if let Some(data) = assets::template(base) {
         return Ok(data.to_string());
-    }
-    if name.contains("singbox_base") {
-        return Ok(
-            r#"{"log":{"level":"info"},"dns":{"servers":[{"address":"https://1.1.1.1/dns-query"}]},"inbounds":[{{.Inbounds}}],"outbounds":[{"type":"direct"}]}"#
-                .into(),
-        );
     }
     anyhow::bail!("template {name} not found")
 }
@@ -569,15 +559,7 @@ pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Resu
         "sub-maker-sub.service",
     ];
     for name in unit_names {
-        let content = match read_template(&format!("templates/{name}.tpl")) {
-            Ok(c) => c,
-            Err(err) => {
-                if name == "sub-maker-sub.service" {
-                    return Err(err);
-                }
-                format!("[Unit]\nDescription={name}\n[Service]\nExecStart=/bin/true\n")
-            }
-        };
+        let content = read_template(&format!("templates/{name}.tpl"))?;
         let rendered = assets::render_simple(
             &content,
             &[
@@ -609,10 +591,9 @@ pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Resu
             fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
             Ok(())
         })();
-        match write_result {
-            Ok(()) => info!(path = %path.display(), "wrote unit"),
-            Err(err) => warn!(path = %path.display(), error = %err, "write unit"),
-        }
+        write_result
+            .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+        info!(path = %path.display(), "wrote unit");
     }
     Ok(())
 }
