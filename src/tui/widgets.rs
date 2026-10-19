@@ -184,7 +184,19 @@ pub fn draw_fields(
         ])
         .split(inner);
 
-    let field_constraints: Vec<Constraint> = (0..fields.len())
+    // Scroll so the focused field stays visible when the page overflows
+    // (six 3-row fields do not fit an 80x24 terminal).
+    let slots = (chunks[0].height / 3).max(1) as usize;
+    let total = fields.len();
+    let start = if active + 1 > slots {
+        (active + 1 - slots).min(total.saturating_sub(slots))
+    } else {
+        0
+    };
+    let end = (start + slots).min(total);
+    let visible = &fields[start..end];
+
+    let field_constraints: Vec<Constraint> = (0..visible.len())
         .map(|_| Constraint::Length(3))
         .collect();
     let rows = Layout::default()
@@ -192,8 +204,8 @@ pub fn draw_fields(
         .constraints(field_constraints)
         .split(chunks[0]);
 
-    for (i, (label, value, password)) in fields.iter().enumerate() {
-        let focused = i == active;
+    for (i, (label, value, password)) in visible.iter().enumerate() {
+        let focused = start + i == active;
         let display = if *password && !value.is_empty() {
             "•".repeat(value.chars().count())
         } else if value.is_empty() {
