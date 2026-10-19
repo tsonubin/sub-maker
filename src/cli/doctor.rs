@@ -27,13 +27,12 @@ pub fn doctor() -> anyhow::Result<()> {
     };
     check("nodes file", nodes_err);
 
-    match diagnostics::detect_public_ip() {
-        Ok(ip) => println!("[INFO] detected public IP: {ip}"),
-        Err(_) => {}
+    let public_ip = diagnostics::detect_public_ip().unwrap_or_default();
+    if !public_ip.is_empty() {
+        println!("[INFO] detected public IP: {public_ip}");
     }
 
     if !cfg.domain.is_empty() {
-        let public_ip = diagnostics::detect_public_ip().unwrap_or_default();
         let (expected_ipv4, expected_ipv6) = if public_ip.is_empty() {
             diagnostics::split_expected_ips(&cfg.server_addr)
         } else {

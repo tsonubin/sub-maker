@@ -1,5 +1,4 @@
 use std::net::{IpAddr, ToSocketAddrs};
-use std::time::Duration;
 
 use crate::config::DnsCheckResult;
 
@@ -12,14 +11,12 @@ pub fn check_domain_dns(
 }
 
 fn lookup_ips(domain: &str) -> Result<Vec<IpAddr>, anyhow::Error> {
-    // Resolve with a short timeout via system resolver.
+    // System resolver (its own timeout applies).
     let addrs = format!("{domain}:0")
         .to_socket_addrs()
         .map_err(|e| anyhow::anyhow!(e))?
         .map(|a| a.ip())
         .collect::<Vec<_>>();
-    // Empty resolution is still success with empty lists.
-    let _ = Duration::from_secs(5);
     Ok(addrs)
 }
 
