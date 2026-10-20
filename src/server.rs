@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
@@ -13,6 +14,30 @@ use tracing::info;
 use url::Url;
 
 use crate::config;
+
+/// Cap on concurrently handled connections. Auth happens only after the
+/// request is read, so without a cap a connection flood from anyone who can
+/// reach the port spawns unbounded threads.
+const MAX_CONNECTIONS: usize = 64;
+
+/// Holds one slot of the connection budget; released on drop.
+struct ConnSlot(Arc<AtomicUsize>);
+
+impl ConnSlot {
+    fn try_acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
+        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+            active.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(ConnSlot(Arc::clone(active)))
+    }
+}
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 pub fn run() -> anyhow::Result<()> {
     let port = std::env::var("SUB_MAKER_PORT").unwrap_or_else(|_| "8964".into());
@@ -49,6 +74,7 @@ pub fn run() -> anyhow::Result<()> {
         "starting sub-maker subscription server"
     );
 
+    let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let stream = match stream {
             Ok(s) => s,
@@ -57,11 +83,16 @@ pub fn run() -> anyhow::Result<()> {
                 continue;
             }
         };
+        let Some(slot) = ConnSlot::try_acquire(&active) else {
+            tracing::warn!("connection limit reached; dropping connection");
+            continue; // dropping `stream` closes it
+        };
         // A client that stalls must not wedge the whole server.
         let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
         let state = Arc::clone(&state);
         std::thread::spawn(move || {
+            let _slot = slot;
             let mut stream = stream;
             if let Err(e) = handle_connection(&mut stream, &state) {
                 tracing::debug!(error = %e, "request handling error");
@@ -396,6 +427,18 @@ fn decode_ss_user_info(encoded: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conn_slots_are_bounded_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let slots: Vec<_> = (0..MAX_CONNECTIONS)
+            .map(|_| ConnSlot::try_acquire(&active).expect("slot under limit"))
+            .collect();
+        assert!(ConnSlot::try_acquire(&active).is_none());
+        drop(slots);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        assert!(ConnSlot::try_acquire(&active).is_some());
+    }
 
     #[test]
     fn token_matches_only_the_exact_token() {
