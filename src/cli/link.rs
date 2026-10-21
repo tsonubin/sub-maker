@@ -14,6 +14,7 @@ pub fn print_subscription_link_with_passcode(
     let passcode = if passcode.is_empty() {
         read_passcode(read_stdin)?
     } else {
+        eprintln!("warning: --passcode is visible in process listings; prefer --passcode-stdin");
         passcode.to_string()
     };
     if !cfg.verify_link_passcode(&passcode) {

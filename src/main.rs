@@ -38,6 +38,10 @@ struct Cli {
     #[arg(long)]
     update: bool,
 
+    /// Refresh managed certificates and restart sing-box if they changed
+    #[arg(long)]
+    renew: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -56,11 +60,13 @@ enum Commands {
     Nodes,
     /// Update sing-box and subconverter binaries
     Update,
+    /// Refresh managed certificates and restart sing-box if they changed
+    Renew,
     /// Print subscription and raw node links
     Links,
     /// Print subscription URL after passcode verification
     Link {
-        /// Passcode for SSH link retrieval
+        /// Passcode for SSH link retrieval (visible in process listings; prefer --passcode-stdin)
         #[arg(long, default_value = "")]
         passcode: String,
         /// Read passcode from stdin
@@ -89,12 +95,72 @@ fn main() {
 
     let result = run(cli);
     if let Err(err) = result {
+        if err.downcast_ref::<tui::UserCancelled>().is_some() {
+            eprintln!("aborted");
+            std::process::exit(130);
+        }
         error!(error = %err, "command failed");
         std::process::exit(1);
     }
 }
 
+/// Rejects invocations that request more than one action. The flag and
+/// subcommand vocabularies are both kept for compatibility, but a flag
+/// silently winning over a subcommand (or another flag) hides user intent.
+fn check_single_action(cli: &Cli) -> anyhow::Result<()> {
+    let mut req: Vec<(&'static str, &'static str)> = Vec::new(); // (action id, label)
+    if cli.setup {
+        req.push(("setup", "--setup"));
+    }
+    if cli.serve {
+        req.push(("serve", "--serve"));
+    }
+    if cli.nodes {
+        req.push(("nodes", "--nodes"));
+    }
+    if cli.update {
+        req.push(("update", "--update"));
+    }
+    if cli.renew {
+        req.push(("renew", "--renew"));
+    }
+    if let Some(cmd) = &cli.command {
+        let entry = match cmd {
+            Commands::Setup => ("setup", "setup"),
+            Commands::Config | Commands::Configure => ("config", "config"),
+            Commands::Serve => ("serve", "serve"),
+            Commands::Nodes => ("nodes", "nodes"),
+            Commands::Update => ("update", "update"),
+            Commands::Renew => ("renew", "renew"),
+            Commands::Links => ("links", "links"),
+            Commands::Link { .. } => ("link", "link"),
+            Commands::Doctor => ("doctor", "doctor"),
+            Commands::Status => ("service", "status"),
+            Commands::Restart => ("service", "restart"),
+            Commands::Start => ("service", "start"),
+            Commands::Stop => ("service", "stop"),
+        };
+        req.push(entry);
+    }
+    // The same action named twice (e.g. `--setup setup`) is not a conflict.
+    let mut distinct: Vec<&(&'static str, &'static str)> = Vec::new();
+    for entry in &req {
+        if !distinct.iter().any(|(id, _)| *id == entry.0) {
+            distinct.push(entry);
+        }
+    }
+    if distinct.len() > 1 {
+        let labels: Vec<&str> = distinct.iter().map(|(_, label)| *label).collect();
+        anyhow::bail!(
+            "cannot combine {}; request one action and see sub-maker --help",
+            labels.join(" with ")
+        );
+    }
+    Ok(())
+}
+
 fn run(cli: Cli) -> anyhow::Result<()> {
+    check_single_action(&cli)?;
     // Flag forms (compatible with Go CLI).
     if cli.setup {
         return run_setup();
@@ -108,6 +174,9 @@ fn run(cli: Cli) -> anyhow::Result<()> {
     if cli.update {
         return run_update();
     }
+    if cli.renew {
+        return run_renew();
+    }
 
     match cli.command {
         Some(Commands::Setup) => run_setup(),
@@ -115,6 +184,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Some(Commands::Serve) => server::run(),
         Some(Commands::Nodes) => print_nodes(),
         Some(Commands::Update) => run_update(),
+        Some(Commands::Renew) => run_renew(),
         Some(Commands::Links) => cli::print_links(),
         Some(Commands::Link {
             passcode,
@@ -176,4 +246,61 @@ fn run_update() -> anyhow::Result<()> {
     setup::download_subconverter("")?;
     println!("Binaries updated. Restart services with: sudo sub-maker restart");
     Ok(())
+}
+
+fn run_renew() -> anyhow::Result<()> {
+    let cfg = cli::load_config().map_err(|e| {
+        anyhow::anyhow!(
+            "load config failed; run setup first ({}): {e}",
+            cli::config_path().display()
+        )
+    })?;
+    let changed = setup::refresh_managed_certs(&cfg)?;
+    if changed {
+        println!("managed certificate refreshed");
+        if !config::demo_mode() {
+            diagnostics::run_systemctl(&["restart", "sing-box"])?;
+            println!("sing-box restarted");
+        }
+    } else {
+        println!("managed certificate unchanged; nothing to restart");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cli() -> Cli {
+        Cli {
+            setup: false,
+            serve: false,
+            nodes: false,
+            update: false,
+            renew: false,
+            command: None,
+        }
+    }
+
+    #[test]
+    fn one_action_per_invocation() {
+        let mut c = cli();
+        c.nodes = true;
+        c.command = Some(Commands::Setup);
+        let err = check_single_action(&c).unwrap_err().to_string();
+        assert!(err.contains("--nodes") && err.contains("setup"), "{err}");
+
+        let mut c = cli();
+        c.setup = true;
+        c.command = Some(Commands::Setup);
+        check_single_action(&c).expect("the same action twice is not a conflict");
+
+        let mut c = cli();
+        c.setup = true;
+        c.serve = true;
+        assert!(check_single_action(&c).is_err());
+
+        check_single_action(&cli()).expect("no action is allowed (prints help)");
+    }
 }

@@ -24,7 +24,7 @@ brew install sub-maker
 
 Also covered there: manual binaries, build from source, firewall, upgrade, uninstall.
 
-Demo without root:
+Demo without root (non-interactive: skips the TUI and applies built-in defaults):
 
 ```bash
 SUB_MAKER_DEMO=1 sub-maker --setup
@@ -100,15 +100,18 @@ sudo sub-maker config
 | `links` | Subscription, raw, and IP fallback URLs |
 | `doctor` | Config, DNS, certs, services, local `/sub` |
 | `status` / `start` / `stop` / `restart` | Managed systemd units |
+| `renew` / `--renew` | Re-copy/validate managed certs; restart sing-box if changed (weekly timer) |
 | `--update` | Refresh sing-box + subconverter binaries |
 | `--version` | Print version |
+
+One action per invocation: combining a flag with a different subcommand (or with another flag) is rejected instead of silently preferring one.
 
 **Environment**
 
 | Variable | Purpose |
 |----------|---------|
 | `SUB_MAKER_DEMO=1` | Non-interactive demo paths; no real service enable |
-| `SUB_MAKER_TOKEN` | Token for `--serve` |
+| `SUB_MAKER_TOKEN` | Token for `--serve` (required; `--serve` refuses empty/default tokens outside demo mode) |
 | `SUB_MAKER_PORT` | Listen port for `--serve` (default 8964) |
 | `SUB_MAKER_NODES_FILE` | Path to `nodes.txt` for `--serve` |
 
@@ -144,7 +147,7 @@ GitHub Actions builds on tags (`v*`) and attaches:
 | **config** | `/etc/sub-maker/config.yaml` |
 | **nodes** | `/etc/sub-maker/nodes.txt` |
 | **sing-box config** | `/etc/sing-box/config.json` |
-| **units** | `sing-box`, `subconverter`, `sub-maker-sub` under `/etc/systemd/system/` |
+| **units** | `sing-box`, `subconverter`, `sub-maker-sub`, `sub-maker-renew.timer` under `/etc/systemd/system/` |
 
 ## Updating
 
