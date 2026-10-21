@@ -137,6 +137,13 @@ pub fn extract_tar_gz(src: &Path, dest: &Path) -> anyhow::Result<()> {
             }
             let mut out = File::create(&target)?;
             io::copy(&mut entry, &mut out)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                // Preserve executable bits at any archive depth, without
+                // restoring setuid, setgid, or sticky bits from the archive.
+                out.set_permissions(fs::Permissions::from_mode(entry.header().mode()? & 0o777))?;
+            }
         }
     }
     Ok(())
@@ -338,6 +345,54 @@ mod tests {
     use super::*;
     use flate2::write::GzEncoder;
     use flate2::Compression;
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_tar_gz_preserves_nested_binary_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("subconverter.tar.gz");
+        let enc = GzEncoder::new(File::create(&archive_path).unwrap(), Compression::default());
+        let mut builder = tar::Builder::new(enc);
+        for (name, body, mode) in [
+            (
+                "subconverter/subconverter",
+                "#!/bin/sh\nprintf ready",
+                0o755,
+            ),
+            ("subconverter/pref.ini", "managed=true\n", 0o644),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(mode);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, name, body.as_bytes())
+                .unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+        let dest = dir.path().join("out");
+        fs::create_dir(&dest).unwrap();
+        extract_tar_gz(&archive_path, &dest).unwrap();
+        let binary = dest.join("subconverter/subconverter");
+        let output = std::process::Command::new(&binary)
+            .output()
+            .expect("extracted nested binary must remain executable");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"ready");
+        assert_eq!(
+            fs::metadata(binary).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        assert_eq!(
+            fs::metadata(dest.join("subconverter/pref.ini"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
+        );
+    }
 
     #[test]
     fn create_new_file_refuses_to_write_through_symlink() {
