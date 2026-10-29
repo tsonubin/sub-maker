@@ -554,6 +554,19 @@ fn setup_subconverter_files(etc_sub: &Path, opt_sc: &Path) -> anyhow::Result<()>
 }
 
 pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Result<()> {
+    let unit_dir = if config::demo_mode() {
+        Path::new("/tmp")
+    } else {
+        Path::new("/etc/systemd/system")
+    };
+    write_systemd_units_to(cfg, nodes_path, unit_dir)
+}
+
+fn write_systemd_units_to(
+    cfg: &SetupConfig,
+    nodes_path: &Path,
+    unit_dir: &Path,
+) -> anyhow::Result<()> {
     config::validate_sub_token(&cfg.sub_token)?;
     let unit_names = [
         "sing-box.service",
@@ -572,11 +585,7 @@ pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Resu
                 ("NodesPath", nodes_path.to_string_lossy().into()),
             ],
         );
-        let path = if config::demo_mode() {
-            PathBuf::from("/tmp").join(name)
-        } else {
-            PathBuf::from("/etc/systemd/system").join(name)
-        };
+        let path = unit_dir.join(name);
         // The subscription unit embeds the token; keep it root-readable only.
         let mode = if name == "sub-maker-sub.service" {
             0o600
@@ -663,18 +672,15 @@ mod tests {
 
     #[test]
     fn write_systemd_units_renders_sub_maker_subscription_unit() {
-        // Serialize env mutations — parallel tests share process env.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("SUB_MAKER_DEMO", "1");
-        let unit_path = PathBuf::from("/tmp/sub-maker-sub.service");
-        let _ = fs::remove_file(&unit_path);
+        // Never mutate process-wide demo mode or touch the real system unit directory.
+        let dir = tempfile::tempdir().unwrap();
+        let unit_path = dir.path().join("sub-maker-sub.service");
         let cfg = SetupConfig {
             sub_token: "test-token".into(),
             sub_port: 1984,
             ..SetupConfig::default()
         };
-        write_systemd_units(&cfg, Path::new("/etc/sub-maker/nodes.txt")).unwrap();
+        write_systemd_units_to(&cfg, Path::new("/etc/sub-maker/nodes.txt"), dir.path()).unwrap();
         let unit = fs::read_to_string(&unit_path).unwrap();
         for want in [
             "Environment=SUB_MAKER_TOKEN=test-token",
@@ -687,26 +693,34 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let mode = fs::metadata(&unit_path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "token-bearing unit must not be world-readable");
-        let _ = fs::remove_file(&unit_path);
-        std::env::remove_var("SUB_MAKER_DEMO");
+        for name in [
+            "sing-box.service",
+            "subconverter.service",
+            "sub-maker-renew.service",
+            "sub-maker-renew.timer",
+        ] {
+            assert!(dir.path().join(name).is_file(), "missing unit {name}");
+        }
     }
 
     #[test]
     fn write_systemd_units_rejects_hostile_token() {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        std::env::set_var("SUB_MAKER_DEMO", "1");
+        let dir = tempfile::tempdir().unwrap();
         let cfg = SetupConfig {
             sub_token: "a\nExecStart=/bin/evil".into(),
             ..SetupConfig::default()
         };
-        assert!(write_systemd_units(&cfg, Path::new("/etc/sub-maker/nodes.txt")).is_err());
+        assert!(
+            write_systemd_units_to(&cfg, Path::new("/etc/sub-maker/nodes.txt"), dir.path()).is_err()
+        );
         let cfg = SetupConfig {
             sub_token: "per%cent".into(),
             ..SetupConfig::default()
         };
-        assert!(write_systemd_units(&cfg, Path::new("/etc/sub-maker/nodes.txt")).is_err());
-        std::env::remove_var("SUB_MAKER_DEMO");
+        assert!(
+            write_systemd_units_to(&cfg, Path::new("/etc/sub-maker/nodes.txt"), dir.path()).is_err()
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[test]

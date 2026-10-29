@@ -265,6 +265,10 @@ fn write_response(
 }
 
 pub fn load_nodes(path: &str) -> Vec<String> {
+    load_nodes_with_demo(path, config::demo_mode())
+}
+
+fn load_nodes_with_demo(path: &str, demo: bool) -> Vec<String> {
     match std::fs::read_to_string(path) {
         Ok(data) => {
             let out: Vec<String> = data
@@ -273,13 +277,13 @@ pub fn load_nodes(path: &str) -> Vec<String> {
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
                 .map(|s| s.to_string())
                 .collect();
-            if out.is_empty() && config::demo_mode() {
+            if out.is_empty() && demo {
                 return demo_nodes();
             }
             out
         }
         Err(_) => {
-            if config::demo_mode() {
+            if demo {
                 demo_nodes()
             } else {
                 vec![]
@@ -499,17 +503,19 @@ mod tests {
 
     #[test]
     fn load_nodes_demo_mode_and_normal_paths() {
-        // Serialize env mutations — parallel tests share process env.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodes.txt");
+        let path = path.to_str().unwrap();
+        assert!(load_nodes_with_demo(path, false).is_empty());
+        assert!(!load_nodes_with_demo(path, true).is_empty());
 
-        std::env::remove_var("SUB_MAKER_DEMO");
-        let nodes = load_nodes("/path/that/does/not/exist/nodes.txt");
-        assert!(nodes.is_empty());
+        std::fs::write(path, "# no nodes yet\n\n").unwrap();
+        assert!(load_nodes_with_demo(path, false).is_empty());
+        assert!(!load_nodes_with_demo(path, true).is_empty());
 
-        std::env::set_var("SUB_MAKER_DEMO", "1");
-        let nodes = load_nodes("/path/that/does/not/exist/nodes.txt");
-        assert!(!nodes.is_empty());
-        std::env::remove_var("SUB_MAKER_DEMO");
+        std::fs::write(path, "# configured node\n  example-node  \n").unwrap();
+        for demo in [false, true] {
+            assert_eq!(load_nodes_with_demo(path, demo), vec!["example-node"]);
+        }
     }
 }
