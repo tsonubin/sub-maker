@@ -34,7 +34,7 @@ sub-maker automates the tedious parts of running a modern proxy server:
 
 - Choosing and configuring multiple strong protocols (the current "best of breed" for different use cases).
 - Generating consistent share links.
-- Obtaining and renewing real TLS certificates.
+- Obtaining real TLS certificates.
 - Preparing a high-quality Clash subscription that includes not just nodes but also battle-tested routing rules (China direct, streaming services, AI tools, ad blocking, etc.).
 - Running everything under systemd with sensible defaults.
 
@@ -47,7 +47,7 @@ The default protocols are:
 - AnyTLS (modern flexible TLS obfuscation)
 - Shadowsocks 2022 (lightweight & fast)
 
-All run inside sing-box. The subscription endpoint (port 8964 by default) is powered by a small Rust server that can leverage subconverter for even richer output.
+All run inside sing-box. The subscription endpoint (port 8964 by default) is a small standalone Rust server that serves the Clash YAML directly; the installed subconverter stack is currently not used by this endpoint.
 
 ## Prerequisites
 
@@ -181,6 +181,13 @@ The TUI will guide you through:
    - SSH link retrieval passcode (auto-generated if left blank)
    - Subscription port (default 8964)
 
+   Invalid values are rejected inline — a missing server address, a bad port, or an
+   empty protocol selection shows an error instead of being silently defaulted. All
+   fields support cursor movement (←/→, Home/End), Delete, Ctrl+U to clear, and
+   pasting. If the domain's DNS does not match the server yet, the wizard offers
+   **Back to edit** (default), **Continue anyway**, or **Abort setup** — nothing you
+   typed is lost.
+
 3. **Protocol selection**
    - Multi-select the protocols you want (all five are pre-selected).
 
@@ -216,7 +223,7 @@ After you confirm, the tool will:
 SUB_MAKER_DEMO=1 ./sub-maker --setup
 ```
 
-This uses `/tmp/sub-maker-demo-etc/...` paths and does not start real services. Very useful for verifying the flow or for CI.
+This uses `/tmp/sub-maker-demo-etc/...` paths and does not start real services. Note that demo setup is non-interactive: it skips the TUI and applies built-in defaults, which smoke-tests the apply pipeline (configs, nodes, units) but not the wizard itself.
 
 ## Certificate Setup
 
@@ -243,7 +250,7 @@ If you later add more subdomains or need to renew, you can re-run the wizard or 
 
 This method does not require port 80 to be free and works even behind CDNs / reverse proxies.
 
-**Important**: Never commit the Cloudflare token to git. The TUI stores it (base64-ish) inside the config, but you should protect the config file (`chmod 600 /etc/sub-maker/config.yaml`).
+**Important**: Never commit the Cloudflare token to git. The TUI stores it in plaintext inside the config, but you should protect the config file (`chmod 600 /etc/sub-maker/config.yaml`).
 
 After certificates are obtained, the sing-box config for the TLS protocols (Hysteria2, TUIC, AnyTLS) will reference them. Reality does not use these certs.
 
@@ -257,6 +264,7 @@ Useful commands:
 sudo sub-maker config
 sudo sub-maker links
 sudo sub-maker link
+sudo sub-maker renew
 sudo sub-maker doctor
 sudo sub-maker status
 sudo sub-maker restart
@@ -334,9 +342,9 @@ Import them individually in clients that support the URI scheme.
 - **Health checks**: Run `sudo sub-maker doctor`.
 - **SSH link retrieval**: Run `sudo sub-maker link` and enter the setup passcode.
 - **Viewing links**: Run `sudo sub-maker links`.
-- **Renewing certificates**: Certbot usually installs a timer; acme.sh usually installs a cron job. You can also renew manually and then run `sudo sub-maker restart`.
+- **Renewing certificates**: Certbot usually installs a timer; acme.sh usually installs a cron job. sub-maker then refreshes the managed copies under `/etc/sub-maker/certs/` via `sudo sub-maker renew`, which a weekly `sub-maker-renew.timer` runs automatically; it restarts sing-box only when the certificate changed. Self-signed certs are regenerated when they expire within 14 days. Run it manually after a manual ACME renewal.
 - **Viewing current nodes**: `sudo sub-maker nodes` or `curl 'http://127.0.0.1:8964/raw?token=...'`.
-- **Updating binaries**: Re-run setup or (when implemented) use `--update`. You can also manually download newer sing-box / subconverter releases and replace the files in `/usr/local/bin` and `/opt/subconverter`, then restart units.
+- **Updating binaries**: `sudo sub-maker --update` refreshes the sing-box and subconverter binaries (then `sudo sub-maker restart`). You can also manually download newer releases and replace the files in `/usr/local/bin` and `/opt/subconverter`.
 - **Backup**: The important files are under `/etc/sub-maker/` (especially `config.yaml` and `nodes.txt`) and your sing-box config. Back them up before major changes.
 
 ## Troubleshooting

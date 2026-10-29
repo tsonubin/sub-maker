@@ -80,6 +80,22 @@ pub fn validate_certificate_pair(
     Ok(())
 }
 
+/// True when the certificate at `cert_path` expires within `days` days
+/// (missing/unparseable certs return an error).
+pub fn certificate_expires_within(cert_path: &str, days: i64) -> anyhow::Result<bool> {
+    let cert_pem = std::fs::read(cert_path)
+        .map_err(|e| anyhow::anyhow!("read certificate: {e}"))?;
+    let (_, pem) = parse_x509_pem(&cert_pem)
+        .map_err(|e| anyhow::anyhow!("certificate file does not contain PEM data: {e}"))?;
+    let (_, cert) = parse_x509_certificate(&pem.contents)
+        .map_err(|e| anyhow::anyhow!("parse certificate: {e}"))?;
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    Ok(cert.validity().not_after.timestamp() - now < days * 86_400)
+}
+
 fn dns_matches(pattern: &str, domain: &str) -> bool {
     if pattern.eq_ignore_ascii_case(domain) {
         return true;

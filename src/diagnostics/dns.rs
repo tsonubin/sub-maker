@@ -1,5 +1,4 @@
 use std::net::{IpAddr, ToSocketAddrs};
-use std::time::Duration;
 
 use crate::config::DnsCheckResult;
 
@@ -12,14 +11,12 @@ pub fn check_domain_dns(
 }
 
 fn lookup_ips(domain: &str) -> Result<Vec<IpAddr>, anyhow::Error> {
-    // Resolve with a short timeout via system resolver.
+    // System resolver (its own timeout applies).
     let addrs = format!("{domain}:0")
         .to_socket_addrs()
         .map_err(|e| anyhow::anyhow!(e))?
         .map(|a| a.ip())
         .collect::<Vec<_>>();
-    // Empty resolution is still success with empty lists.
-    let _ = Duration::from_secs(5);
     Ok(addrs)
 }
 
@@ -68,8 +65,9 @@ where
             (result, None)
         }
         Err(err) => {
-            result.ipv4_matches = expected_ipv4.is_empty();
-            result.ipv6_matches = expected_ipv6.is_empty();
+            // A failed lookup never proves that the expected address matches.
+            result.ipv4_matches = false;
+            result.ipv6_matches = false;
             (result, Some(err))
         }
     }
@@ -134,11 +132,12 @@ mod tests {
     }
 
     #[test]
-    fn check_domain_dns_returns_partial_result_on_lookup_error() {
-        let (result, err) = check_domain_dns_with("example.com", "43.245.198.178", "", |_| {
+    fn check_domain_dns_marks_lookup_errors_as_unmatched() {
+        let (result, err) = check_domain_dns_with("example.com", "", "", |_| {
             Err(anyhow::anyhow!("no such host"))
         });
         assert!(err.is_some());
         assert_eq!(result.domain, "example.com");
+        assert!(!dns_matches(&result));
     }
 }

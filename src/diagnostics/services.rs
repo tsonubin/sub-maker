@@ -38,18 +38,31 @@ pub fn verify_subscription_endpoint(url: &str) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
-    let resp = client
-        .get(url)
-        .send()
-        .map_err(|e| anyhow::anyhow!("request subscription endpoint: {e}"))?;
+    let resp = client.get(url).send().map_err(|e| {
+        // without_url: the URL embeds the subscription token.
+        anyhow::anyhow!("request subscription endpoint: {}", e.without_url())
+    })?;
     if !resp.status().is_success() {
         anyhow::bail!("subscription endpoint returned {}", resp.status());
     }
-    let body = resp
-        .text()
-        .map_err(|e| anyhow::anyhow!("read subscription response: {e}"))?;
+    let body = resp.text().map_err(|e| {
+        anyhow::anyhow!("read subscription response: {}", e.without_url())
+    })?;
     if !body.contains("proxy-groups:") {
         anyhow::bail!("subscription endpoint did not return Clash YAML");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_subscription_endpoint;
+
+    #[test]
+    fn endpoint_errors_do_not_leak_the_token() {
+        // Nothing listens on port 1: deterministic refusal, no traffic.
+        let err = verify_subscription_endpoint("http://127.0.0.1:1/sub?token=super-secret-token")
+            .expect_err("connection must be refused");
+        assert!(!err.to_string().contains("super-secret-token"));
+    }
 }

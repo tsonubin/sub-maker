@@ -10,17 +10,17 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::config::{
-    self, CertStrategy, DnsCheckResult, SetupConfig, SetupMode, ALL_PROTOCOLS,
+    self, CertStrategy, DnsCheckResult, SetupConfig, SetupMode,
 };
 use crate::diagnostics;
-use crate::tui::terminal::{cancel_err, next_key, Tui};
+use crate::tui::terminal::{cancel_err, next_input, Input, Tui};
 use crate::tui::theme::Theme;
 use crate::tui::widgets::{
     draw_fields, draw_footer, draw_header, draw_option_list, draw_review, draw_sidebar, kv_line,
     root_chunks, StepMeta, StepStatus,
 };
 use crate::tui::{
-    capitalize_first, random_hex, random_secret, random_ss2022_secret, random_token,
+    capitalize_first, random_hex, random_secret, random_ss2022_secret, random_token, Field,
 };
 
 const POLL: Duration = Duration::from_millis(80);
@@ -74,13 +74,6 @@ impl Step {
         }
     }
 
-}
-
-struct Field {
-    label: &'static str,
-    help: &'static str,
-    value: String,
-    password: bool,
 }
 
 struct Wizard {
@@ -139,44 +132,53 @@ impl Wizard {
             }
         }
 
-        let identity = vec![
+        let mut identity = vec![
             Field {
                 label: "Server address",
                 help: "Public IP or domain used in client share links",
                 value: server_default,
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "Domain",
                 help: "DNS name for certs & subscription (required in production)",
                 value: String::new(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "ACME email",
                 help: "Contact email for Let's Encrypt / acme.sh",
                 value: String::new(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "Subscription token",
                 help: "Leave blank to auto-generate",
                 value: String::new(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "SSH link passcode",
                 help: "Protects `sub-maker link` · blank = auto-generate",
                 value: String::new(),
                 password: true,
+                pos: 0,
             },
             Field {
                 label: "Sub port",
                 help: "Subscription HTTP listen port",
                 value: "8964".into(),
                 password: false,
+                pos: 0,
             },
         ];
+        for f in &mut identity {
+            f.pos = f.value.len();
+        }
 
         Self {
             step: Step::Mode,
@@ -282,7 +284,7 @@ impl Wizard {
             }
             Step::Protocols => {
                 if self.enabled_protocols().is_empty() {
-                    self.proto_selected = [true; 5];
+                    anyhow::bail!("select at least one protocol (Space toggles, a = all, n = none)");
                 }
                 if self.needs_certs() {
                     if self.setup_mode() == SetupMode::IpOnly {
@@ -313,7 +315,7 @@ impl Wizard {
                 self.enter_details()?;
             }
             Step::Details => {
-                self.save_current_detail();
+                self.save_current_detail()?;
                 if self.detail_idx + 1 < self.detail_protos.len() {
                     self.detail_idx += 1;
                     self.load_detail_fields();
@@ -345,7 +347,10 @@ impl Wizard {
             }
             Step::Details => {
                 if self.detail_idx > 0 {
-                    self.save_current_detail();
+                    if let Err(e) = self.save_current_detail() {
+                        self.error = Some(e.to_string());
+                        return;
+                    }
                     self.detail_idx -= 1;
                     self.load_detail_fields();
                 } else if self.needs_certs() {
@@ -366,8 +371,20 @@ impl Wizard {
     }
 
     fn validate_identity(&self) -> anyhow::Result<()> {
+        if self.identity[0].value.trim().is_empty() {
+            anyhow::bail!("server address is required (public IP or domain used in the share links)");
+        }
         if self.setup_mode() == SetupMode::Production && self.identity[1].value.trim().is_empty() {
             anyhow::bail!("domain is required for production setup");
+        }
+        let sub_port = self.identity[5].value.trim();
+        if !sub_port.is_empty() {
+            let port: u16 = sub_port
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid subscription port: {sub_port:?}"))?;
+            if port == 0 {
+                anyhow::bail!("subscription port must be between 1 and 65535");
+            }
         }
         Ok(())
     }
@@ -394,36 +411,54 @@ impl Wizard {
     }
 
     fn prepare_cert_extra(&mut self) {
-        self.cert_extra.clear();
-        match self.cert_strategy() {
-            CertStrategy::AcmeDnsCf => {
-                self.cert_extra.push(Field {
-                    label: "Cloudflare API token",
-                    help: "DNS edit permission for the zone",
-                    value: String::new(),
-                    password: true,
-                });
-            }
-            CertStrategy::Existing => {
-                self.cert_extra.push(Field {
+        let previous = std::mem::take(&mut self.cert_extra);
+        let mut fields = match self.cert_strategy() {
+            CertStrategy::AcmeDnsCf => vec![Field {
+                label: "Cloudflare API token",
+                help: "DNS edit permission for the zone",
+                value: String::new(),
+                password: true,
+                pos: 0,
+            }],
+            CertStrategy::Existing => vec![
+                Field {
                     label: "Certificate path",
                     help: "fullchain.pem",
                     value: "/etc/sub-maker/certs/fullchain.pem".into(),
                     password: false,
-                });
-                self.cert_extra.push(Field {
+                    pos: 0,
+                },
+                Field {
                     label: "Private key path",
                     help: "privkey.pem",
                     value: "/etc/sub-maker/certs/privkey.pem".into(),
                     password: false,
-                });
-            }
-            _ => {}
+                    pos: 0,
+                },
+            ],
+            _ => vec![],
+        };
+        for f in fields.iter_mut() {
+            f.pos = f.value.len();
         }
+        // Keep what the user already typed when re-entering with the same
+        // field set (e.g. after back-navigation); only reset on change.
+        if previous.len() == fields.len()
+            && previous
+                .iter()
+                .zip(fields.iter())
+                .all(|(old, new)| old.label == new.label)
+        {
+            for (old, new) in previous.into_iter().zip(fields.iter_mut()) {
+                new.value = old.value;
+                new.pos = old.pos.min(new.value.len());
+            }
+        }
+        self.cert_extra = fields;
     }
 
     fn apply_cert_extra(&mut self) -> anyhow::Result<()> {
-        if self.cert_strategy() == CertStrategy::Existing {
+        if self.cert_strategy() == CertStrategy::Existing && self.cert_extra.len() >= 2 {
             let cert = self.cert_extra[0].value.trim();
             let key = self.cert_extra[1].value.trim();
             let domain = self.identity[1].value.trim();
@@ -465,18 +500,21 @@ impl Wizard {
                 help: "Inbound port on this server",
                 value: port.to_string(),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "Remark / tag",
                 help: "Name shown in clients",
                 value: existing.get("remark").cloned().unwrap_or(remark),
                 password: false,
+                pos: 0,
             },
             Field {
                 label: "SNI / target",
                 help: "TLS SNI or Reality handshake target",
                 value: default_sni,
                 password: false,
+                pos: 0,
             },
         ];
         if matches!(p.as_str(), "hysteria2" | "tuic" | "anytls" | "ss2022") {
@@ -485,6 +523,7 @@ impl Wizard {
                 help: "Blank = auto-generate",
                 value: existing.get("pass").cloned().unwrap_or_default(),
                 password: true,
+                pos: 0,
             });
         }
         if matches!(p.as_str(), "reality" | "tuic") {
@@ -493,6 +532,7 @@ impl Wizard {
                 help: "Blank = auto-generate",
                 value: existing.get("uuid").cloned().unwrap_or_default(),
                 password: false,
+                pos: 0,
             });
         }
         if p == "reality" {
@@ -501,30 +541,38 @@ impl Wizard {
                 help: "Blank = generate during apply",
                 value: existing.get("pbk").cloned().unwrap_or_default(),
                 password: false,
+                pos: 0,
             });
             fields.push(Field {
                 label: "Reality shortId",
                 help: "8 hex chars · blank = auto",
                 value: existing.get("short_id").cloned().unwrap_or_default(),
                 password: false,
+                pos: 0,
             });
+        }
+        for f in fields.iter_mut() {
+            f.pos = f.value.len();
         }
         self.detail_fields = fields;
         self.detail_focus = 0;
     }
 
-    fn save_current_detail(&mut self) {
+    fn save_current_detail(&mut self) -> anyhow::Result<()> {
         if self.detail_protos.is_empty() {
-            return;
+            return Ok(());
         }
         let p = self.detail_protos[self.detail_idx].clone();
         let mut extra = HashMap::new();
         let mut fi = 0;
-        if let Ok(port) = self.detail_fields[fi].value.trim().parse::<u16>() {
-            if port > 0 {
-                self.ports.insert(p.clone(), port);
-            }
+        let port_str = self.detail_fields[fi].value.trim();
+        let port: u16 = port_str
+            .parse()
+            .map_err(|_| anyhow::anyhow!("invalid listen port for {p}: {port_str:?}"))?;
+        if port == 0 {
+            anyhow::bail!("listen port for {p} must be between 1 and 65535");
         }
+        self.ports.insert(p.clone(), port);
         fi += 1;
         let remark = self.detail_fields[fi].value.trim().to_string();
         if !remark.is_empty() {
@@ -570,15 +618,16 @@ impl Wizard {
             extra.insert("short_id".into(), sid);
         }
         self.creds.insert(p, extra);
+        Ok(())
     }
 
     fn build_config(&mut self) -> anyhow::Result<SetupConfig> {
-        self.save_current_detail();
+        self.save_current_detail()?;
         let mut cfg = SetupConfig::default_config();
         cfg.setup_mode = self.setup_mode();
         cfg.server_addr = self.identity[0].value.trim().to_string();
         if cfg.server_addr.is_empty() {
-            cfg.server_addr = "127.0.0.1".into();
+            anyhow::bail!("server address is required");
         }
         cfg.domain = self.identity[1].value.trim().to_string();
         cfg.email = self.identity[2].value.trim().to_string();
@@ -595,17 +644,18 @@ impl Wizard {
             passcode
         };
         cfg.set_link_passcode(&passcode)?;
-        cfg.sub_port = self.identity[5]
-            .value
-            .trim()
-            .parse()
-            .unwrap_or(8964);
+        cfg.sub_port = match self.identity[5].value.trim() {
+            "" => 8964,
+            v => v
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid subscription port: {v:?}"))?,
+        };
         if cfg.sub_port == 0 {
-            cfg.sub_port = 8964;
+            anyhow::bail!("subscription port must be between 1 and 65535");
         }
         cfg.enabled_protocols = self.enabled_protocols();
         if cfg.enabled_protocols.is_empty() {
-            cfg.enabled_protocols = ALL_PROTOCOLS.iter().map(|s| s.to_string()).collect();
+            anyhow::bail!("select at least one protocol");
         }
         cfg.ports = self.ports.clone();
         cfg.creds = self.creds.clone();
@@ -628,16 +678,24 @@ impl Wizard {
         Ok(cfg)
     }
 
-    fn type_into_field(field: &mut Field, code: KeyCode, mods: KeyModifiers) {
-        match code {
-            KeyCode::Char('u') if mods.contains(KeyModifiers::CONTROL) => field.value.clear(),
-            KeyCode::Backspace => {
-                field.value.pop();
-            }
-            KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) => {
-                field.value.push(c);
-            }
-            _ => {}
+    fn focused_field(&mut self) -> Option<&mut Field> {
+        match self.step {
+            Step::Identity => self.identity.get_mut(self.identity_focus),
+            Step::Certs if self.show_cert_extra => self.cert_extra.get_mut(self.cert_extra_focus),
+            Step::Details => self.detail_fields.get_mut(self.detail_focus),
+            _ => None,
+        }
+    }
+
+    fn type_into(&mut self, code: KeyCode, mods: KeyModifiers) {
+        if let Some(field) = self.focused_field() {
+            field.edit(code, mods);
+        }
+    }
+
+    pub fn handle_paste(&mut self, text: &str) {
+        if let Some(field) = self.focused_field() {
+            field.paste(text);
         }
     }
 
@@ -645,21 +703,29 @@ impl Wizard {
         // returns true when done
         if self.dns_warning.is_some() {
             match code {
-                KeyCode::Left | KeyCode::Right | KeyCode::Char('h') | KeyCode::Char('l') => {
-                    self.dns_cursor = 1 - self.dns_cursor;
+                KeyCode::Left | KeyCode::Char('h') => {
+                    self.dns_cursor = (self.dns_cursor + 2) % 3;
                 }
-                KeyCode::Enter => {
-                    if self.dns_cursor == 1 {
+                KeyCode::Right | KeyCode::Char('l') => {
+                    self.dns_cursor = (self.dns_cursor + 1) % 3;
+                }
+                KeyCode::Enter => match self.dns_cursor {
+                    1 => {
                         self.dns_warning = None;
                         self.step = Step::Protocols;
                         self.max_reached = self.max_reached.max(self.step as usize);
-                    } else {
+                    }
+                    2 => {
                         return Err(anyhow::anyhow!(
                             "DNS for {} does not point at this server",
                             self.identity[1].value.trim()
                         ));
                     }
-                }
+                    _ => {
+                        // Back to edit: keep everything typed.
+                        self.dns_warning = None;
+                    }
+                },
                 KeyCode::Esc => {
                     self.dns_warning = None;
                 }
@@ -687,7 +753,11 @@ impl Wizard {
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.mode_cursor = (self.mode_cursor + 1).min(1);
                 }
-                KeyCode::Enter | KeyCode::Right => self.go_next()?,
+                KeyCode::Enter | KeyCode::Right => {
+                    if let Err(e) = self.go_next() {
+                        self.error = Some(e.to_string());
+                    }
+                }
                 _ => {}
             },
             Step::Identity => match code {
@@ -707,9 +777,7 @@ impl Wizard {
                     }
                 }
                 KeyCode::Left if mods.contains(KeyModifiers::CONTROL) => self.go_back(),
-                other => {
-                    Self::type_into_field(&mut self.identity[self.identity_focus], other, mods);
-                }
+                other => self.type_into(other, mods),
             },
             Step::Protocols => match code {
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -723,7 +791,11 @@ impl Wizard {
                 }
                 KeyCode::Char('a') => self.proto_selected = [true; 5],
                 KeyCode::Char('n') => self.proto_selected = [false; 5],
-                KeyCode::Enter | KeyCode::Right => self.go_next()?,
+                KeyCode::Enter | KeyCode::Right => {
+                    if let Err(e) = self.go_next() {
+                        self.error = Some(e.to_string());
+                    }
+                }
                 KeyCode::Left | KeyCode::BackTab => self.go_back(),
                 _ => {}
             },
@@ -746,15 +818,7 @@ impl Wizard {
                             }
                         }
                         KeyCode::Left if mods.contains(KeyModifiers::CONTROL) => self.go_back(),
-                        other => {
-                            if !self.cert_extra.is_empty() {
-                                Self::type_into_field(
-                                    &mut self.cert_extra[self.cert_extra_focus],
-                                    other,
-                                    mods,
-                                );
-                            }
-                        }
+                        other => self.type_into(other, mods),
                     }
                 } else {
                     match code {
@@ -786,20 +850,12 @@ impl Wizard {
                 KeyCode::Enter => {
                     if self.detail_focus + 1 < self.detail_fields.len() {
                         self.detail_focus += 1;
-                    } else {
-                        self.go_next()?;
+                    } else if let Err(e) = self.go_next() {
+                        self.error = Some(e.to_string());
                     }
                 }
                 KeyCode::Left if mods.contains(KeyModifiers::CONTROL) => self.go_back(),
-                other => {
-                    if !self.detail_fields.is_empty() {
-                        Self::type_into_field(
-                            &mut self.detail_fields[self.detail_focus],
-                            other,
-                            mods,
-                        );
-                    }
-                }
+                other => self.type_into(other, mods),
             },
             Step::Review => match code {
                 KeyCode::Enter => self.finished = true,
@@ -930,10 +986,10 @@ impl Wizard {
     }
 
     fn draw_identity(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
-        let fields: Vec<(String, String, bool)> = self
+        let fields: Vec<(String, String, bool, usize)> = self
             .identity
             .iter()
-            .map(|fld| (fld.label.to_string(), fld.value.clone(), fld.password))
+            .map(|fld| (fld.label.to_string(), fld.value.clone(), fld.password, fld.pos))
             .collect();
         let help = self
             .identity
@@ -960,10 +1016,10 @@ impl Wizard {
 
     fn draw_certs(&self, f: &mut ratatui::Frame, area: ratatui::layout::Rect) {
         if self.show_cert_extra {
-            let fields: Vec<(String, String, bool)> = self
+            let fields: Vec<(String, String, bool, usize)> = self
                 .cert_extra
                 .iter()
-                .map(|fld| (fld.label.to_string(), fld.value.clone(), fld.password))
+                .map(|fld| (fld.label.to_string(), fld.value.clone(), fld.password, fld.pos))
                 .collect();
             let help = self
                 .cert_extra
@@ -1013,10 +1069,10 @@ impl Wizard {
             self.detail_idx + 1,
             self.detail_protos.len().max(1)
         );
-        let fields: Vec<(String, String, bool)> = self
+        let fields: Vec<(String, String, bool, usize)> = self
             .detail_fields
             .iter()
-            .map(|fld| (fld.label.to_string(), fld.value.clone(), fld.password))
+            .map(|fld| (fld.label.to_string(), fld.value.clone(), fld.password, fld.pos))
             .collect();
         let help = self
             .detail_fields
@@ -1089,22 +1145,20 @@ impl Wizard {
             chunks[0],
         );
 
-        let yes = self.dns_cursor == 1;
-        let abort_style = if !yes {
-            Theme::selected()
-        } else {
-            Theme::muted()
-        };
-        let cont_style = if yes {
-            Theme::selected()
-        } else {
-            Theme::muted()
+        let style_for = |i: usize| {
+            if self.dns_cursor == i {
+                Theme::selected()
+            } else {
+                Theme::muted()
+            }
         };
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("  Abort setup  ", abort_style),
+                Span::styled("  Back to edit  ", style_for(0)),
                 Span::raw("   "),
-                Span::styled("  Continue anyway  ", cont_style),
+                Span::styled("  Continue anyway  ", style_for(1)),
+                Span::raw("   "),
+                Span::styled("  Abort setup  ", style_for(2)),
             ])),
             chunks[1],
         );
@@ -1148,12 +1202,14 @@ pub fn run_wizard() -> anyhow::Result<SetupConfig> {
 
     loop {
         tui.draw(|f| wiz.draw(f))?;
-        if let Some(key) = next_key(POLL)? {
-            match wiz.handle_key(key.code, key.modifiers) {
+        match next_input(POLL)? {
+            Some(Input::Key(key)) => match wiz.handle_key(key.code, key.modifiers) {
                 Ok(true) => break,
                 Ok(false) => {}
                 Err(e) => return Err(e),
-            }
+            },
+            Some(Input::Paste(text)) => wiz.handle_paste(&text),
+            None => {}
         }
     }
 

@@ -35,11 +35,19 @@ pub fn apply(cfg: &mut SetupConfig) -> anyhow::Result<()> {
 
     info!("downloading sing-box...");
     if let Err(err) = download_sing_box("") {
-        warn!(error = %err, "sing-box download failed (may already exist or network)");
+        warn!(
+            error = %err,
+            "sing-box download failed; continuing with any installed binary (if missing, \
+             install it manually from https://github.com/SagerNet/sing-box/releases and re-run)"
+        );
     }
     info!("downloading subconverter...");
     if let Err(err) = download_subconverter("") {
-        warn!(error = %err, "subconverter download failed");
+        warn!(
+            error = %err,
+            "subconverter download failed; continuing without it (optional component; \
+             retry later or install under /opt/subconverter)"
+        );
     }
 
     ensure_certificates(cfg)?;
@@ -297,25 +305,19 @@ pub fn ensure_runtime_credentials(cfg: &mut SetupConfig) -> anyhow::Result<()> {
 
 fn random_secret() -> String {
     let mut b = [0u8; 18];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return Uuid::new_v4().to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     URL_SAFE_NO_PAD.encode(b)
 }
 
 fn random_ss2022_secret() -> String {
     let mut b = [0u8; 16];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return random_secret();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     STANDARD.encode(b)
 }
 
 fn random_hex(size: usize) -> String {
     let mut b = vec![0u8; size];
-    if rand::thread_rng().try_fill_bytes(&mut b).is_err() {
-        return Uuid::new_v4().simple().to_string()[..size * 2].to_string();
-    }
+    rand::thread_rng().fill_bytes(&mut b);
     hex::encode(b)
 }
 
@@ -332,7 +334,7 @@ fn generate_reality_keypair() -> anyhow::Result<(String, String)> {
     let output = Command::new(&binary)
         .args(["generate", "reality-keypair"])
         .output()
-        .map_err(|e| anyhow::anyhow!("generate reality keypair: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("run {} to generate Reality keys: {e}", binary.display()))?;
     if !output.status.success() {
         anyhow::bail!(
             "generate reality keypair: {}\n{}",
@@ -367,7 +369,7 @@ fn extract_key_line(output: &str, pattern: &str) -> String {
 
 fn start_and_verify_services(cfg: &SetupConfig) -> anyhow::Result<()> {
     diagnostics::run_systemctl(&["daemon-reload"])?;
-    let mut services = vec!["sing-box", "sub-maker-sub"];
+    let mut services = vec!["sing-box", "sub-maker-sub", "sub-maker-renew.timer"];
     if subconverter_installed() {
         services.push("subconverter");
     }
@@ -396,24 +398,14 @@ pub fn protocol_server_name(
 }
 
 fn read_template(name: &str) -> anyhow::Result<String> {
-    if let Ok(data) = fs::read_to_string(name) {
-        return Ok(data);
-    }
     let base = Path::new(name)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or(name);
-    if let Ok(data) = fs::read_to_string(format!("templates/{base}")) {
-        return Ok(data);
-    }
+    // Embedded assets only: these become root service units and configs and
+    // must never be influenced by the caller's working directory.
     if let Some(data) = assets::template(base) {
         return Ok(data.to_string());
-    }
-    if name.contains("singbox_base") {
-        return Ok(
-            r#"{"log":{"level":"info"},"dns":{"servers":[{"address":"https://1.1.1.1/dns-query"}]},"inbounds":[{{.Inbounds}}],"outbounds":[{"type":"direct"}]}"#
-                .into(),
-        );
     }
     anyhow::bail!("template {name} not found")
 }
@@ -503,7 +495,7 @@ pub fn render_sing_box_config(cfg: &SetupConfig, etc_sb: &Path) -> anyhow::Resul
                 cfg.ports.get(proto).copied().unwrap_or(0)
             )
         });
-        inbound_strs.push(assets::render_simple(&tpl_content, &data));
+        inbound_strs.push(assets::render_json(&tpl_content, &data, &["Port"]));
     }
 
     // Assemble base JSON without relying on Go's range template.
@@ -537,7 +529,7 @@ pub fn render_sing_box_config(cfg: &SetupConfig, etc_sb: &Path) -> anyhow::Resul
     );
 
     if let Err(err) = serde_json::from_str::<serde_json::Value>(&base) {
-        warn!(error = %err, "sing-box config may not be perfect json");
+        anyhow::bail!("generated sing-box config is not valid JSON: {err}");
     }
     fs::write(etc_sb.join("config.json"), base)?;
     Ok(())
@@ -562,21 +554,29 @@ fn setup_subconverter_files(etc_sub: &Path, opt_sc: &Path) -> anyhow::Result<()>
 }
 
 pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Result<()> {
+    let unit_dir = if config::demo_mode() {
+        Path::new("/tmp")
+    } else {
+        Path::new("/etc/systemd/system")
+    };
+    write_systemd_units_to(cfg, nodes_path, unit_dir)
+}
+
+fn write_systemd_units_to(
+    cfg: &SetupConfig,
+    nodes_path: &Path,
+    unit_dir: &Path,
+) -> anyhow::Result<()> {
+    config::validate_sub_token(&cfg.sub_token)?;
     let unit_names = [
         "sing-box.service",
         "subconverter.service",
         "sub-maker-sub.service",
+        "sub-maker-renew.service",
+        "sub-maker-renew.timer",
     ];
     for name in unit_names {
-        let content = match read_template(&format!("templates/{name}.tpl")) {
-            Ok(c) => c,
-            Err(err) => {
-                if name == "sub-maker-sub.service" {
-                    return Err(err);
-                }
-                format!("[Unit]\nDescription={name}\n[Service]\nExecStart=/bin/true\n")
-            }
-        };
+        let content = read_template(&format!("templates/{name}.tpl"))?;
         let rendered = assets::render_simple(
             &content,
             &[
@@ -585,15 +585,28 @@ pub fn write_systemd_units(cfg: &SetupConfig, nodes_path: &Path) -> anyhow::Resu
                 ("NodesPath", nodes_path.to_string_lossy().into()),
             ],
         );
-        let path = if config::demo_mode() {
-            PathBuf::from("/tmp").join(name)
+        let path = unit_dir.join(name);
+        // The subscription unit embeds the token; keep it root-readable only.
+        let mode = if name == "sub-maker-sub.service" {
+            0o600
         } else {
-            PathBuf::from("/etc/systemd/system").join(name)
+            0o644
         };
-        match fs::write(&path, &rendered) {
-            Ok(()) => info!(path = %path.display(), "wrote unit"),
-            Err(err) => warn!(path = %path.display(), error = %err, "write unit"),
-        }
+        let write_result = (|| -> anyhow::Result<()> {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .open(&path)?;
+            std::io::Write::write_all(&mut f, rendered.as_bytes())?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode))?;
+            Ok(())
+        })();
+        write_result
+            .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
+        info!(path = %path.display(), "wrote unit");
     }
     Ok(())
 }
@@ -659,15 +672,15 @@ mod tests {
 
     #[test]
     fn write_systemd_units_renders_sub_maker_subscription_unit() {
-        std::env::set_var("SUB_MAKER_DEMO", "1");
-        let unit_path = PathBuf::from("/tmp/sub-maker-sub.service");
-        let _ = fs::remove_file(&unit_path);
+        // Never mutate process-wide demo mode or touch the real system unit directory.
+        let dir = tempfile::tempdir().unwrap();
+        let unit_path = dir.path().join("sub-maker-sub.service");
         let cfg = SetupConfig {
             sub_token: "test-token".into(),
             sub_port: 1984,
             ..SetupConfig::default()
         };
-        write_systemd_units(&cfg, Path::new("/etc/sub-maker/nodes.txt")).unwrap();
+        write_systemd_units_to(&cfg, Path::new("/etc/sub-maker/nodes.txt"), dir.path()).unwrap();
         let unit = fs::read_to_string(&unit_path).unwrap();
         for want in [
             "Environment=SUB_MAKER_TOKEN=test-token",
@@ -677,8 +690,37 @@ mod tests {
         ] {
             assert!(unit.contains(want), "missing {want:?} in:\n{unit}");
         }
-        let _ = fs::remove_file(&unit_path);
-        std::env::remove_var("SUB_MAKER_DEMO");
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&unit_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "token-bearing unit must not be world-readable");
+        for name in [
+            "sing-box.service",
+            "subconverter.service",
+            "sub-maker-renew.service",
+            "sub-maker-renew.timer",
+        ] {
+            assert!(dir.path().join(name).is_file(), "missing unit {name}");
+        }
+    }
+
+    #[test]
+    fn write_systemd_units_rejects_hostile_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = SetupConfig {
+            sub_token: "a\nExecStart=/bin/evil".into(),
+            ..SetupConfig::default()
+        };
+        assert!(
+            write_systemd_units_to(&cfg, Path::new("/etc/sub-maker/nodes.txt"), dir.path()).is_err()
+        );
+        let cfg = SetupConfig {
+            sub_token: "per%cent".into(),
+            ..SetupConfig::default()
+        };
+        assert!(
+            write_systemd_units_to(&cfg, Path::new("/etc/sub-maker/nodes.txt"), dir.path()).is_err()
+        );
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[test]
@@ -703,6 +745,26 @@ mod tests {
         let inbounds = parsed["inbounds"].as_array().unwrap();
         assert_eq!(inbounds.len(), 1);
         assert_eq!(inbounds[0]["type"], "shadowsocks");
+    }
+
+    #[test]
+    fn render_sing_box_config_escapes_credentials_in_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = SetupConfig {
+            enabled_protocols: vec!["ss2022".into()],
+            ports: [("ss2022".into(), 8388)].into_iter().collect(),
+            creds: [(
+                "ss2022".into(),
+                [("pass".into(), "p\"w\\d\nx".into())].into_iter().collect(),
+            )]
+            .into_iter()
+            .collect(),
+            ..SetupConfig::default()
+        };
+        render_sing_box_config(&cfg, dir.path()).unwrap();
+        let data = fs::read_to_string(dir.path().join("config.json")).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(parsed["inbounds"][0]["password"], "p\"w\\d\nx");
     }
 
     #[test]

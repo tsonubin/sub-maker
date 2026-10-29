@@ -2,18 +2,56 @@ use base64::{
     engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
     Engine as _,
 };
+use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+use subtle::ConstantTimeEq;
 use tracing::info;
 use url::Url;
 
 use crate::config;
 
+/// Cap on concurrently handled connections. Auth happens only after the
+/// request is read, so without a cap a connection flood from anyone who can
+/// reach the port spawns unbounded threads.
+const MAX_CONNECTIONS: usize = 64;
+
+/// Holds one slot of the connection budget; released on drop.
+struct ConnSlot(Arc<AtomicUsize>);
+
+impl ConnSlot {
+    fn try_acquire(active: &Arc<AtomicUsize>) -> Option<Self> {
+        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONNECTIONS {
+            active.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(ConnSlot(Arc::clone(active)))
+    }
+}
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 pub fn run() -> anyhow::Result<()> {
     let port = std::env::var("SUB_MAKER_PORT").unwrap_or_else(|_| "8964".into());
-    let token = std::env::var("SUB_MAKER_TOKEN").unwrap_or_else(|_| "changeme-in-config".into());
+    let token = std::env::var("SUB_MAKER_TOKEN").unwrap_or_default();
+    if token.is_empty() || token == "changeme-in-config" {
+        if config::demo_mode() {
+            tracing::warn!("serving with a default/empty token in demo mode");
+        } else {
+            anyhow::bail!(
+                "SUB_MAKER_TOKEN is unset or the insecure default; \
+                 set it (the generated systemd unit does) or use SUB_MAKER_DEMO=1 for smoke tests"
+            );
+        }
+    }
     let nodes_path = std::env::var("SUB_MAKER_NODES_FILE").unwrap_or_else(|_| {
         PathBuf::from(config::etc_base())
             .join("sub-maker")
@@ -36,18 +74,30 @@ pub fn run() -> anyhow::Result<()> {
         "starting sub-maker subscription server"
     );
 
+    let active = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
-        let mut stream = match stream {
+        let stream = match stream {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(error = %e, "accept failed");
                 continue;
             }
         };
+        let Some(slot) = ConnSlot::try_acquire(&active) else {
+            tracing::warn!("connection limit reached; dropping connection");
+            continue; // dropping `stream` closes it
+        };
+        // A client that stalls must not wedge the whole server.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
         let state = Arc::clone(&state);
-        if let Err(e) = handle_connection(&mut stream, &state) {
-            tracing::debug!(error = %e, "request handling error");
-        }
+        std::thread::spawn(move || {
+            let _slot = slot;
+            let mut stream = stream;
+            if let Err(e) = handle_connection(&mut stream, &state) {
+                tracing::debug!(error = %e, "request handling error");
+            }
+        });
     }
     Ok(())
 }
@@ -56,6 +106,15 @@ struct ServerState {
     token: String,
     nodes_path: String,
     port: String,
+}
+
+/// Constant-time token comparison over fixed-length digests.
+fn token_matches(expected: &str, got: Option<&str>) -> bool {
+    let mut h1 = Sha256::new();
+    h1.update(expected.as_bytes());
+    let mut h2 = Sha256::new();
+    h2.update(got.unwrap_or_default().as_bytes());
+    bool::from(h1.finalize().ct_eq(&h2.finalize()))
 }
 
 fn handle_connection(stream: &mut (impl Read + Write), state: &ServerState) -> anyhow::Result<()> {
@@ -88,7 +147,7 @@ fn handle_connection(stream: &mut (impl Read + Write), state: &ServerState) -> a
             write_response(stream, 200, "text/plain; charset=utf-8", &body, &[])?;
         }
         "/raw" => {
-            if query_token.as_deref() != Some(state.token.as_str()) {
+            if !token_matches(&state.token, query_token.as_deref()) {
                 write_response(stream, 401, "text/plain", "unauthorized\n", &[])?;
                 return Ok(());
             }
@@ -101,7 +160,7 @@ fn handle_connection(stream: &mut (impl Read + Write), state: &ServerState) -> a
             write_response(stream, 200, "text/plain", &body, &[])?;
         }
         "/sub" => {
-            if query_token.as_deref() != Some(state.token.as_str()) {
+            if !token_matches(&state.token, query_token.as_deref()) {
                 write_response(stream, 401, "text/plain", "unauthorized\n", &[])?;
                 return Ok(());
             }
@@ -206,6 +265,10 @@ fn write_response(
 }
 
 pub fn load_nodes(path: &str) -> Vec<String> {
+    load_nodes_with_demo(path, config::demo_mode())
+}
+
+fn load_nodes_with_demo(path: &str, demo: bool) -> Vec<String> {
     match std::fs::read_to_string(path) {
         Ok(data) => {
             let out: Vec<String> = data
@@ -214,13 +277,13 @@ pub fn load_nodes(path: &str) -> Vec<String> {
                 .filter(|line| !line.is_empty() && !line.starts_with('#'))
                 .map(|s| s.to_string())
                 .collect();
-            if out.is_empty() && config::demo_mode() {
+            if out.is_empty() && demo {
                 return demo_nodes();
             }
             out
         }
         Err(_) => {
-            if config::demo_mode() {
+            if demo {
                 demo_nodes()
             } else {
                 vec![]
@@ -234,6 +297,26 @@ fn demo_nodes() -> Vec<String> {
         "hysteria2://demo-pass@127.0.0.1:8443/?sni=example.com#Hy2".into(),
         "vless://demo-uuid@127.0.0.1:443?security=reality&fp=chrome&sni=www.apple.com&sid=0123abc&pbk=demo-pbk#Reality".into(),
     ]
+}
+
+/// Renders a YAML double-quoted scalar, escaping the values that would
+/// otherwise break (or inject into) the generated Clash config.
+fn yaml_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 pub fn nodes_to_clash_proxies_with_names(nodes: &[String]) -> (String, Vec<String>) {
@@ -263,23 +346,28 @@ pub fn nodes_to_clash_proxies_with_names(nodes: &[String]) -> (String, Vec<Strin
                 .unwrap_or_default()
         };
 
+        let remark_q = yaml_quote(&remark);
+        let host_q = yaml_quote(host);
+        let sni_q = yaml_quote(&query("sni"));
+
         let line = match scheme {
             "hysteria2" => format!(
-                "  - {{name: \"{remark}\", type: hysteria2, server: {host}, port: {port}, password: \"{username}\", sni: \"{}\", alpn: [h3], udp: true, skip-cert-verify: false}}\n",
-                query("sni")
+                "  - {{name: {remark_q}, type: hysteria2, server: {host_q}, port: {port}, password: {}, sni: {sni_q}, alpn: [h3], udp: true, skip-cert-verify: false}}\n",
+                yaml_quote(username)
             ),
             "vless" => {
                 let sec = query("security");
                 if sec == "reality" {
                     format!(
-                        "  - {{name: \"{remark}\", type: vless, server: {host}, port: {port}, uuid: \"{username}\", network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: \"{}\", packet-encoding: xudp, reality-opts: {{public-key: \"{}\", short-id: \"{}\"}}, client-fingerprint: chrome}}\n",
-                        query("sni"),
-                        query("pbk"),
-                        query("sid")
+                        "  - {{name: {remark_q}, type: vless, server: {host_q}, port: {port}, uuid: {}, network: tcp, tls: true, udp: true, flow: xtls-rprx-vision, servername: {sni_q}, packet-encoding: xudp, reality-opts: {{public-key: {}, short-id: {}}}, client-fingerprint: chrome}}\n",
+                        yaml_quote(username),
+                        yaml_quote(&query("pbk")),
+                        yaml_quote(&query("sid"))
                     )
                 } else {
                     format!(
-                        "  - {{name: \"{remark}\", type: vless, server: {host}, port: {port}, uuid: \"{username}\", tls: true, udp: true}}\n"
+                        "  - {{name: {remark_q}, type: vless, server: {host_q}, port: {port}, uuid: {}, tls: true, udp: true}}\n",
+                        yaml_quote(username)
                     )
                 }
             }
@@ -296,27 +384,30 @@ pub fn nodes_to_clash_proxies_with_names(nodes: &[String]) -> (String, Vec<Strin
                     (username.to_string(), password.to_string())
                 };
                 format!(
-                    "  - {{name: \"{remark}\", type: tuic, server: {host}, port: {port}, uuid: \"{uuid}\", password: \"{pass}\", sni: \"{}\", alpn: [h3], udp: true, udp-relay-mode: native, congestion-controller: bbr}}\n",
-                    query("sni")
+                    "  - {{name: {remark_q}, type: tuic, server: {host_q}, port: {port}, uuid: {}, password: {}, sni: {sni_q}, alpn: [h3], udp: true, udp-relay-mode: native, congestion-controller: bbr}}\n",
+                    yaml_quote(&uuid),
+                    yaml_quote(&pass)
                 )
             }
             "anytls" => format!(
-                "  - {{name: \"{remark}\", type: anytls, server: {host}, port: {port}, password: \"{username}\", sni: \"{}\", client-fingerprint: chrome, udp: true, alpn: [h2, http/1.1]}}\n",
-                query("sni")
+                "  - {{name: {remark_q}, type: anytls, server: {host_q}, port: {port}, password: {}, sni: {sni_q}, client-fingerprint: chrome, udp: true, alpn: [h2, http/1.1]}}\n",
+                yaml_quote(username)
             ),
             "ss" => {
                 let (cipher, password) = decode_ss_user_info(username);
                 format!(
-                    "  - {{name: \"{remark}\", type: ss, server: {host}, port: {port}, cipher: \"{cipher}\", password: \"{password}\", udp: true}}\n"
+                    "  - {{name: {remark_q}, type: ss, server: {host_q}, port: {port}, cipher: {}, password: {}, udp: true}}\n",
+                    yaml_quote(&cipher),
+                    yaml_quote(&password)
                 )
             }
             _ => format!(
-                "  - {{name: \"{remark}\", type: ss, server: {host}, port: {port}, cipher: \"aes-128-gcm\", password: \"demo\"}}\n"
+                "  - {{name: {remark_q}, type: ss, server: {host_q}, port: {port}, cipher: \"aes-128-gcm\", password: \"demo\"}}\n"
             ),
         };
         if !line.is_empty() {
             buf.push_str(&line);
-            names.push(remark);
+            names.push(remark_q);
         }
     }
     (buf, names)
@@ -340,6 +431,27 @@ fn decode_ss_user_info(encoded: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conn_slots_are_bounded_and_released() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let slots: Vec<_> = (0..MAX_CONNECTIONS)
+            .map(|_| ConnSlot::try_acquire(&active).expect("slot under limit"))
+            .collect();
+        assert!(ConnSlot::try_acquire(&active).is_none());
+        drop(slots);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        assert!(ConnSlot::try_acquire(&active).is_some());
+    }
+
+    #[test]
+    fn token_matches_only_the_exact_token() {
+        assert!(token_matches("s3cret", Some("s3cret")));
+        assert!(!token_matches("s3cret", Some("s3cre")));
+        assert!(!token_matches("s3cret", Some("")));
+        assert!(!token_matches("s3cret", None));
+        assert!(token_matches("", Some("")));
+    }
 
     #[test]
     fn nodes_to_clash_proxies_uses_protocol_accurate_fields() {
@@ -373,18 +485,37 @@ mod tests {
     }
 
     #[test]
+    fn nodes_to_clash_escapes_yaml_specials_and_ipv6_hosts() {
+        let nodes = vec![
+            // query_pairs percent-decodes: sni becomes a"b\c
+            "hysteria2://p@1.2.3.4:8443/?sni=a%22b%5Cc#node1".into(),
+            "ss://YWVzLTEyOC1nY206cA@[::1]:8388#v6".into(),
+        ];
+        let (yaml, names) = nodes_to_clash_proxies_with_names(&nodes);
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str(&format!("proxies:\n{yaml}")).expect("generated YAML must parse");
+        assert_eq!(doc["proxies"][0]["sni"].as_str().unwrap(), "a\"b\\c");
+        assert_eq!(doc["proxies"][1]["server"].as_str().unwrap(), "[::1]");
+        // Group-list names must parse back to the same scalars as proxy names.
+        let group_name: serde_yaml::Value = serde_yaml::from_str(&names[0]).unwrap();
+        assert_eq!(group_name.as_str().unwrap(), "node1");
+    }
+
+    #[test]
     fn load_nodes_demo_mode_and_normal_paths() {
-        // Serialize env mutations — parallel tests share process env.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodes.txt");
+        let path = path.to_str().unwrap();
+        assert!(load_nodes_with_demo(path, false).is_empty());
+        assert!(!load_nodes_with_demo(path, true).is_empty());
 
-        std::env::remove_var("SUB_MAKER_DEMO");
-        let nodes = load_nodes("/path/that/does/not/exist/nodes.txt");
-        assert!(nodes.is_empty());
+        std::fs::write(path, "# no nodes yet\n\n").unwrap();
+        assert!(load_nodes_with_demo(path, false).is_empty());
+        assert!(!load_nodes_with_demo(path, true).is_empty());
 
-        std::env::set_var("SUB_MAKER_DEMO", "1");
-        let nodes = load_nodes("/path/that/does/not/exist/nodes.txt");
-        assert!(!nodes.is_empty());
-        std::env::remove_var("SUB_MAKER_DEMO");
+        std::fs::write(path, "# configured node\n  example-node  \n").unwrap();
+        for demo in [false, true] {
+            assert_eq!(load_nodes_with_demo(path, demo), vec!["example-node"]);
+        }
     }
 }

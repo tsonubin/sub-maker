@@ -54,7 +54,7 @@ What the script does:
 
 1. Detects `amd64` or `arm64`
 2. Fetches the matching asset from the latest [GitHub Release](https://github.com/tsonubin/sub-maker/releases)
-3. Optionally verifies against `checksums.txt` when available
+3. Verifies the binary against `checksums.txt` and refuses to install on mismatch (override: `SUB_MAKER_INSTALL_INSECURE=1`)
 4. Installs to `/usr/local/bin/sub-maker`
 5. If a release download is unavailable, falls back to **building from source** (installs Rust via rustup if needed)
 
@@ -358,11 +358,13 @@ sudo sub-maker config
 There is no automated uninstaller. To remove a production install:
 
 ```bash
-sudo systemctl disable --now sing-box sub-maker-sub subconverter 2>/dev/null || true
+sudo systemctl disable --now sing-box sub-maker-sub subconverter sub-maker-renew.timer 2>/dev/null || true
 sudo rm -f /usr/local/bin/sub-maker /usr/local/bin/sing-box
 sudo rm -f /etc/systemd/system/sing-box.service \
            /etc/systemd/system/sub-maker-sub.service \
-           /etc/systemd/system/subconverter.service
+           /etc/systemd/system/subconverter.service \
+           /etc/systemd/system/sub-maker-renew.service \
+           /etc/systemd/system/sub-maker-renew.timer
 sudo systemctl daemon-reload
 # optional: remove data (configs, nodes, certs)
 # sudo rm -rf /etc/sub-maker /etc/sing-box /opt/subconverter
